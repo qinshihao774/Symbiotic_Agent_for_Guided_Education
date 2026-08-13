@@ -1,0 +1,21 @@
+fastapi==0.115.*
+uvicorn[standard]==0.34.*
+pydantic-settings==2.7.*
+httpx==0.28.*
+redis==5.2.*
+apscheduler==3.11.*
+openai>=1.70.0,<3
+torch>=2.0
+torch-geometric>=2.5
+mineru>=3.4.0
+
+# === 知识图谱构建 Pipeline ===
+networkx>=3.0
+psycopg2-binary>=2.9
+asyncpg>=0.30
+
+# === MCP 客户端 ===
+mcp>=1.0.0
+
+# === 测试 ===
+pytest-asyncio>=0.24.0

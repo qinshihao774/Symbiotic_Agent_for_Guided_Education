@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>智教慧学 - 系统架构图</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;margin:0;padding:20px;background:#f5f7fa;}
+.container{max-width:1240px;margin:0 auto;}
+</style>
+</head>
+<body>
+<div class="container">
+<div style="width: 1200px; box-sizing: border-box; position: relative; background: #f0f4f8; padding: 20px; border-radius: 8px; border: 1px solid #c8d6e5;">
+<style scoped>
+.arch-title { text-align: center; font-size: 22px; font-weight: bold; color: #1a365d; margin-bottom: 8px; font-family: Georgia, serif; }
+.arch-subtitle { text-align: center; font-size: 13px; color: #475569; margin-bottom: 16px; }
+.arch-layer { margin: 8px 0; padding: 14px; border-radius: 6px; box-shadow: 0 1px 4px rgba(30, 58, 138, 0.08); }
+.arch-layer-title { font-size: 13px; font-weight: bold; margin-bottom: 10px; text-align: center; }
+.arch-grid { display: grid; gap: 8px; }
+.arch-grid-2 { grid-template-columns: repeat(2, 1fr); }
+.arch-grid-3 { grid-template-columns: repeat(3, 1fr); }
+.arch-grid-4 { grid-template-columns: repeat(4, 1fr); }
+.arch-grid-5 { grid-template-columns: repeat(5, 1fr); }
+.arch-box { border-radius: 4px; padding: 8px; text-align: center; font-size: 11px; font-weight: 600; line-height: 1.35; color: #1e293b; background: #ffffff; border: 1px solid #cbd5e1; }
+.arch-box.highlight { background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%); border: 2px solid #2563eb; }
+.arch-box.tech { font-size: 10px; color: #475569; background: #f1f5f9; }
+.arch-layer.user { background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%); border: 2px solid #3b82f6; }
+.arch-layer.user .arch-layer-title { color: #1e40af; }
+.arch-layer.application { background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%); border: 2px solid #0284c7; }
+.arch-layer.application .arch-layer-title { color: #075985; }
+.arch-layer.ai { background: linear-gradient(135deg, #e0e7ff 0%, #c7d2fe 100%); border: 2px solid #6366f1; }
+.arch-layer.ai .arch-layer-title { color: #3730a3; }
+.arch-layer.data { background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%); border: 2px solid #10b981; }
+.arch-layer.data .arch-layer-title { color: #065f46; }
+.arch-layer.infra { background: linear-gradient(135deg, #f5f3ff 0%, #ede9fe 100%); border: 2px solid #7c3aed; }
+.arch-layer.infra .arch-layer-title { color: #5b21b6; }
+/* 助学侧样式 */
+.arch-layer.learn { background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%); border: 2px solid #3b82f6; }
+.arch-layer.learn .arch-layer-title { color: #1e40af; }
+/* 助教侧样式 */
+.arch-layer.teach { background: linear-gradient(135deg, #fce7f3 0%, #fbcfe8 100%); border: 2px solid #ec4899; }
+.arch-layer.teach .arch-layer-title { color: #9d174d; }
+</style>
+<div class="arch-title">智教慧学</div>
+<div class="arch-subtitle">计算机科学学习智能助教助学平台 · 408 · 数据库原理</div>
+<div style="max-width: 900px; margin: 0 auto;">
+
+    <!-- 用户界面层 · 共享 -->
+    <div class="arch-layer user">
+        <div class="arch-layer-title">用户界面层 · Vue</div>
+        <div class="arch-grid arch-grid-4">
+            <div class="arch-box highlight">用户界面<br><small>Element Plus</small></div>
+            <div class="arch-box">知识图谱<br><small>ECharts可视化</small></div>
+            <div class="arch-box highlight">代码编辑器<br><small>Monaco Editor</small></div>
+            <div class="arch-box">路由管理<br><small>Vue Router</small></div>
+        </div>
+    </div>
+
+    <!-- 应用服务层 · 共享 -->
+    <div class="arch-layer application">
+        <div class="arch-layer-title">应用服务层 · FastAPI + Python</div>
+        <div class="arch-grid arch-grid-4">
+            <div class="arch-box highlight">RESTful API<br><small>FastAPI高性能</small></div>
+            <div class="arch-box">数据验证<br><small>Pydantic</small></div>
+            <div class="arch-box highlight">ORM层<br><small>SQLAlchemy</small></div>
+            <div class="arch-box">用户认证<br><small>JWT</small></div>
+        </div>
+    </div>
+
+    <!-- 智能层 · 双引擎 + 共享GNN -->
+    <div style="margin: 8px 0;">
+        <!-- 共享 GNN推理 -->
+        <div style="margin-bottom: 8px;">
+            <div class="arch-box highlight" style="background: linear-gradient(135deg, #a78bfa 0%, #8b5cf6 100%); border: 2px solid #7c3aed; color: #fff; padding: 10px; font-size: 12px;">
+                GNN推理 · 图神经网络<br>
+                <small style="color: #e0e7ff;">学生侧：题目推荐 · 教师侧：教案推荐生成</small>
+            </div>
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+            <!-- 助学智能引擎 -->
+            <div class="arch-layer learn">
+                <div class="arch-layer-title">🎓 助学智能引擎 · 学生侧</div>
+                <div style="margin-bottom: 8px;">
+                    <div class="arch-grid arch-grid-2">
+                        <div class="arch-box highlight" style="background: linear-gradient(135deg, #bfdbfe 0%, #93c5fd 100%); border-color: #3b82f6;">GraphRAG<br><small>图检索增强生成</small></div>
+                        <div class="arch-box highlight" style="background: linear-gradient(135deg, #bfdbfe 0%, #93c5fd 100%); border-color: #3b82f6;">知识推理<br><small>关系学习</small></div>
+                    </div>
+                </div>
+                <div class="arch-grid arch-grid-2">
+                    <div class="arch-box">学习计划生成<br><small>基于用户水平</small></div>
+                    <div class="arch-box">进度跟踪<br><small>智能提醒</small></div>
+                    <div class="arch-box highlight">错题本分析<br><small>薄弱点识别</small></div>
+                    <div class="arch-box highlight">动态题目指导<br><small>个性化解题</small></div>
+                </div>
+            </div>
+
+            <!-- 助教智能引擎 -->
+            <div class="arch-layer teach">
+                <div class="arch-layer-title">👩‍🏫 助教智能引擎 · 教师侧</div>
+                <div style="margin-bottom: 8px;">
+                    <div class="arch-grid arch-grid-2">
+                        <div class="arch-box highlight" style="background: linear-gradient(135deg, #fbcfe8 0%, #f9a8d4 100%); border-color: #ec4899;">学情分析<br><small>数据挖掘</small></div>
+                        <div class="arch-box highlight" style="background: linear-gradient(135deg, #fbcfe8 0%, #f9a8d4 100%); border-color: #ec4899;">教学优化<br><small>策略推荐</small></div>
+                    </div>
+                </div>
+                <div class="arch-grid arch-grid-2">
+                    <div class="arch-box">学生画像<br><small>能力评估</small></div>
+                    <div class="arch-box">预警机制<br><small>学习风险</small></div>
+                    <div class="arch-box highlight">批量评估<br><small>作业/考试</small></div>
+                    <div class="arch-box highlight">内容推荐<br><small>教学资源</small></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 功能模块层 · 分区 -->
+    <div style="display: grid; grid-template-columns: 1fr 2fr 2fr; gap: 8px; margin: 8px 0;">
+        <!-- 共享基础模块 -->
+        <div class="arch-layer infra">
+            <div class="arch-layer-title">🔗 共享基础</div>
+            <div class="arch-grid" style="grid-template-columns: 1fr;">
+                <div class="arch-box">用户系统<br><small>注册/登录/档案</small></div>
+            </div>
+        </div>
+
+        <!-- 助学功能模块 -->
+        <div class="arch-layer learn">
+            <div class="arch-layer-title">📚 助学功能模块</div>
+            <div class="arch-grid arch-grid-3">
+                <div class="arch-box">个人学习中心<br><small>学习仪表盘</small></div>
+                <div class="arch-box highlight">知识图谱探索<br><small>学科体系</small></div>
+                <div class="arch-box">题目实战<br><small>408/数据库原理</small></div>
+            </div>
+        </div>
+
+        <!-- 助教功能模块 -->
+        <div class="arch-layer teach">
+            <div class="arch-layer-title">📊 助教功能模块</div>
+            <div class="arch-grid arch-grid-3">
+                <div class="arch-box">课程管理<br><small>内容发布</small></div>
+                <div class="arch-box highlight">学生管理<br><small>班级/分组</small></div>
+                <div class="arch-box">数据分析<br><small>学情报告</small></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 数据存储层 · 共享 -->
+    <div class="arch-layer data">
+        <div class="arch-layer-title">数据存储层</div>
+        <div class="arch-grid arch-grid-3">
+            <div class="arch-box tech">ChromaDB<br><small>向量数据库 · 知识图谱/语义检索</small></div>
+            <div class="arch-box tech">Redis<br><small>缓存 · 会话</small></div>
+            <div class="arch-box tech">OSS<br><small>文件存储 · 视频/图片</small></div>
+        </div>
+    </div>
+
+</div>
+</div>
+</div>
+</body>
+</html>
