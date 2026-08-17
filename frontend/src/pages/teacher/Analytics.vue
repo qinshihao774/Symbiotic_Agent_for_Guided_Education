@@ -30,7 +30,7 @@
           </div>
           <div class="flex items-center justify-between">
             <span>班级 AI 评级</span>
-            <span class="font-semibold text-emerald-600">A</span>
+            <span class="font-semibold" :class="aiLevelColor">{{ classAiLevel || '--' }}</span>
           </div>
           <div class="flex items-center justify-between">
             <span>最近一次平均分</span>
@@ -38,7 +38,7 @@
           </div>
           <div class="flex items-center justify-between">
             <span>知识点平均掌握度</span>
-            <span class="font-semibold text-sky-600">78%</span>
+            <span class="font-semibold text-sky-600">{{ classAvgProcessText }}</span>
           </div>
         </div>
       </el-card>
@@ -473,6 +473,8 @@ const teachingSuggestion = ref<ClassTeachingSuggestion['suggestion'] | null>(nul
 const teachingSuggestionWeights = ref<Record<string, number>>({})
 const teachingSuggestionError = ref('')
 const teachingSuggestionMissing = ref<string[]>([])
+const classAiLevel = ref<string | null>(null)
+const classAvgProcess = ref<number | null>(null)
 
 const DIMENSION_LABELS_MAP: Record<string, string> = {
   student_level: '学生评级',
@@ -482,6 +484,20 @@ const DIMENSION_LABELS_MAP: Record<string, string> = {
 
 const dimensionLabel = (key: string) => DIMENSION_LABELS_MAP[key] || key
 
+const AI_LEVEL_COLORS: Record<string, string> = {
+  A: 'text-emerald-600',
+  B: 'text-sky-600',
+  C: 'text-amber-500',
+  D: 'text-orange-500',
+  E: 'text-red-500',
+}
+const aiLevelColor = computed(() => (classAiLevel.value ? AI_LEVEL_COLORS[classAiLevel.value] || 'text-slate-900' : 'text-slate-400'))
+const classAvgProcessText = computed(() =>
+  classAvgProcess.value === null || classAvgProcess.value === undefined
+    ? '--'
+    : `${(classAvgProcess.value * 100).toFixed(1)}%`,
+)
+
 const loadTeachingSuggestion = async () => {
   if (selectedClass.value === null || selectedCourse.value === null) return
   teachingSuggestionLoading.value = true
@@ -489,12 +505,16 @@ const loadTeachingSuggestion = async () => {
   teachingSuggestionError.value = ''
   teachingSuggestionMissing.value = []
   teachingSuggestionWeights.value = {}
+  classAiLevel.value = null
+  classAvgProcess.value = null
 
   try {
     const data = await getClassTeachingSuggestion(selectedClass.value, selectedCourse.value)
     if (data.status === 'ok' && data.suggestion) {
       teachingSuggestion.value = data.suggestion
       teachingSuggestionWeights.value = data.weights || {}
+      classAiLevel.value = data.ai_level || data.suggestion.ai_level || null
+      classAvgProcess.value = data.course_avg_process ?? null
     } else if (data.status === 'insufficient') {
       teachingSuggestionError.value =
         data.error_message || '当前数据不足，暂时无法给出教学建议。'

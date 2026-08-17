@@ -34,6 +34,8 @@
     "missing_dimensions": [str],
     "error": str | None,
     "error_message": str | None,
+    "ai_level": str | None,          # 班级 AI 评级（A/B/C/D/E，仅 status=ok 时可能非空）
+    "course_avg_process": float | None,  # 班级知识点平均掌握度进度（0~1，仅 status=ok 时可能非空）
     "suggestion": {...} | None
 }
 """
@@ -107,10 +109,21 @@ def build_suggestion_system_prompt() -> str:
 3. **具体可执行**：建议要具体到章节、知识点、教学策略、练习安排，而不是泛泛而谈。
 4. **实事求是**：只能基于给定的数据给出建议，数据中没有的信息不得臆造。
 
+## 班级 AI 评级
+
+在给出建议的同时，必须基于三个维度综合评估，为班级给出一个整体 AI 评级（`ai_level`），取值仅限 A / B / C / D / E 五档：
+- **A**：班级整体学情优秀（学生评级普遍高、知识点平均掌握度高、疑难问题少）
+- **B**：班级整体学情良好
+- **C**：班级整体学情中等
+- **D**：班级整体学情偏弱
+- **E**：班级整体学情薄弱（学生评级普遍低、掌握度低、疑难问题多）
+
+评级必须实事求是，严格依据给定数据，不得臆造。
+
 ## 输出格式
 
 只输出一行纯 JSON，不要包含任何其他内容、解释或 markdown 标记：
-{"overall_assessment":"班级整体学情评估（150字以内）","priority_focus":["优先教学重点1","优先教学重点2","优先教学重点3"],"teaching_strategies":[{"strategy":"教学策略名称","detail":"具体做法与理由"}],"difficult_focus":"针对疑难章节与知识点的专项突破建议","homework_suggestion":"作业与练习安排建议","teacher_notes":"给教师的补充说明（含缺失维度说明）"}"""
+{"ai_level":"A","overall_assessment":"班级整体学情评估（150字以内）","priority_focus":["优先教学重点1","优先教学重点2","优先教学重点3"],"teaching_strategies":[{"strategy":"教学策略名称","detail":"具体做法与理由"}],"difficult_focus":"针对疑难章节与知识点的专项突破建议","homework_suggestion":"作业与练习安排建议","teacher_notes":"给教师的补充说明（含缺失维度说明）"}"""
 
 
 # ── 达到最大轮次时的强制输出提示 ───────────────────────────────
@@ -220,6 +233,12 @@ class ClassTeachingAgent:
             class_id, course_id, course_name, dimensions_detail, weights, available_count
         )
 
+        # 7. 提取班级 AI 评级与知识点平均掌握度（用于落库）
+        ai_level = (suggestion or {}).get("ai_level")
+        if ai_level not in ("A", "B", "C", "D", "E"):
+            ai_level = None
+        course_avg_process = dimensions_detail.get("class_mastery", {}).get("avg_process")
+
         return {
             "class_id": class_id,
             "course_id": course_id,
@@ -231,6 +250,8 @@ class ClassTeachingAgent:
             "missing_dimensions": [],
             "error": None,
             "error_message": None,
+            "ai_level": ai_level,
+            "course_avg_process": course_avg_process,
             "suggestion": suggestion,
         }
 

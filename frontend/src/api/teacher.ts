@@ -50,7 +50,10 @@ export interface ClassTeachingSuggestion {
   missing_dimensions: string[]
   error: string | null
   error_message: string | null
+  ai_level: string | null
+  course_avg_process: number | null
   suggestion: {
+    ai_level?: string
     overall_assessment: string
     priority_focus: string[]
     teaching_strategies: { strategy: string; detail: string }[]
