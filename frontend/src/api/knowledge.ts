@@ -7,6 +7,7 @@ export interface GraphNode {
   description: string
   degree: number
   mastery?: number
+  progress?: number
 }
 
 export interface GraphEdge {

@@ -217,34 +217,39 @@ const currentCourseId = computed(() => (
 
 // 掌握度映射：节点名 → 掌握度(0~1)，用于节点球"装水"可视化
 const masteryMap = ref<Record<string, number>>({})
+// 进度映射：节点名 → 进度(0~1)，用于章节/小节节点显示进度百分比
+const processMap = ref<Record<string, number>>({})
 
 // 根据当前图谱的 course_id 加载掌握度层级树，并构建 节点名→掌握度 映射
 async function loadMastery() {
   masteryMap.value = {}
+  processMap.value = {}
   const graph = store.graphList.find(g => g.id === selectedGraphId.value)
   if (!graph || graph.course_id == null) return
   try {
     const hierarchy = await fetchMasteryHierarchy(graph.course_id)
-    const map: Record<string, number> = {}
-    const walk = (degree: number, name: string) => {
-      map[name] = Math.max(0, Math.min(1, degree / 5))
-    }
+    const mMap: Record<string, number> = {}
+    const pMap: Record<string, number> = {}
     for (const chapter of hierarchy.chapters) {
-      walk(chapter.degree, chapter.name)
+      mMap[chapter.name] = Math.max(0, Math.min(1, chapter.degree / 5))
+      pMap[chapter.name] = Math.max(0, Math.min(1, (chapter.process ?? 0) / 100))
       for (const section of chapter.sections) {
-        walk(section.degree, section.name)
+        mMap[section.name] = Math.max(0, Math.min(1, section.degree / 5))
+        pMap[section.name] = Math.max(0, Math.min(1, (section.process ?? 0) / 100))
         for (const kp of section.knowledge_points) {
-          walk(kp.degree, kp.name)
+          mMap[kp.name] = Math.max(0, Math.min(1, kp.degree / 5))
         }
       }
       for (const kp of chapter.knowledge_points) {
-        walk(kp.degree, kp.name)
+        mMap[kp.name] = Math.max(0, Math.min(1, kp.degree / 5))
       }
     }
-    masteryMap.value = map
+    masteryMap.value = mMap
+    processMap.value = pMap
   } catch (e) {
     console.error('加载掌握度失败:', e)
     masteryMap.value = {}
+    processMap.value = {}
   }
 }
 
@@ -315,9 +320,13 @@ const currentGraphData = computed<GraphData | null>(() => {
   const base = getVisibleData(store.graphData, drillPath.value, hierarchy.value)
   const projectedBase = base
 
-  // 注入掌握度（节点名 → 掌握度 0~1），用于节点球"装水"可视化
+  // 注入掌握度与进度（节点名 → 0~1），用于节点可视化
   const injectMastery = (nodes: GraphNode[]) =>
-    nodes.map(n => ({ ...n, mastery: masteryMap.value[n.name] ?? 0 }))
+    nodes.map(n => ({
+      ...n,
+      mastery: masteryMap.value[n.name] ?? 0,
+      progress: processMap.value[n.name] ?? 0,
+    }))
 
   const currentChapter = drillPath.value[drillPath.value.length - 1]
   const isSectionView = drillPath.value.length >= 2

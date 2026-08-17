@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="kg-chart-shell">
     <div ref="chartRef" class="kg-chart-2d" />
     <svg ref="edgeOverlayRef" class="kg-edge-overlay" aria-hidden="true" />
@@ -62,7 +62,10 @@ function getRelationColor(edge: { relationship_name: string }): string {
 }
 
 function buildChartNode(node: GraphNode): ChartNodePayload {
-  const mastery = Math.max(0, Math.min(1, node.mastery || 0))
+  // 章节/小节节点使用 process 进度百分比，知识点使用 mastery 掌握度
+  const mastery = (node.type === 'Chapter' || node.type === 'Section')
+    ? Math.max(0, Math.min(1, node.progress || 0))
+    : Math.max(0, Math.min(1, node.mastery || 0))
   const symbolSize = Math.max(30, Math.min(70, 20 + (node.degree || 0) * 3))
   const percentText = `${Math.round(mastery * 100)}%`
   const nameGap = 4
@@ -88,11 +91,9 @@ function buildChartNode(node: GraphNode): ChartNodePayload {
       show: !waveMode,
       position: 'inside',
       offset: props.showLabels ? [0, Math.round((nameGap + nameLineHeight) / 2)] : [0, 0],
-      formatter: node.type === 'Chapter'
-        ? `{name|${node.name}}`
-        : props.showLabels
-          ? `{pct|${percentText}}\n{name|${node.name}}`
-          : `{pct|${percentText}}`,
+      formatter: props.showLabels
+        ? `{pct|${percentText}}\n{name|${node.name}}`
+        : `{pct|${percentText}}`,
       rich: {
         pct: {
           color: '#fff',
@@ -104,7 +105,7 @@ function buildChartNode(node: GraphNode): ChartNodePayload {
           textShadowColor: 'rgba(15, 23, 42, 0.35)',
         },
         name: {
-          color: props.showMasteryWave ? '#fff' : '#334155',
+          color: '#000000',
           fontSize: 12,
           fontWeight: 700,
           align: 'center',
@@ -561,13 +562,12 @@ defineExpose({
 :deep(.kg-wave-name) {
   max-width: 150px;
   margin-top: 2px;
-  color: #fff;
+  color: #000000;
   font-size: 12px;
   font-weight: 700;
   line-height: 15px;
   text-align: center;
   white-space: normal;
-  text-shadow: 0 0 2px rgba(255, 255, 255, 0.92);
 }
 :deep(.kg-wave-motion) {
   transform-box: fill-box;
