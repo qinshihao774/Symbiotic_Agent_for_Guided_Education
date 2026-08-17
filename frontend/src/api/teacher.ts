@@ -128,3 +128,48 @@ export function getClassTeachingSuggestion(classId: number, courseId: number) {
     },
   )
 }
+
+/** 教师建议与评价 — 双维度评估结果 */
+export interface StuEvaluation {
+  stu_id: number
+  course_id: number
+  course_name: string | null
+  status: 'ok' | 'insufficient' | 'db_error'
+  dimensions_available: number
+  weights: Record<string, number>
+  dimensions_detail: Record<string, any>
+  missing_dimensions: string[]
+  error: string | null
+  error_message: string | null
+  evaluation: {
+    overall_assessment: string
+    strengths: string[]
+    weaknesses: string[]
+    suggestions: { suggestion: string; detail: string }[]
+    priority_focus: string[]
+    teacher_notes: string
+  } | null
+}
+
+/** 生成教师对单个学生的建议与评价（AI 专职 ReAct Agent，双维度评估）。
+ *  综合学生 AI 评级、知识图谱进度两个维度，各维度等权（2 维各 1/2），
+ *  缺失维度时触发兜底机制。
+ */
+export function getStuEvaluation(studentId: number, courseId: number) {
+  return request.get<StuEvaluation>(`/teacher/students/${studentId}/evaluation`, {
+    params: { course_id: courseId },
+  })
+}
+
+/** 保存教师对某学生的评价到 evaluation_analysis 表。 */
+export function saveStuEvaluation(
+  studentId: number,
+  courseId: number,
+  eaDescription: string,
+) {
+  return request.post<{ success: boolean; message: string }>(
+    `/teacher/students/${studentId}/evaluation`,
+    { ea_description: eaDescription },
+    { params: { course_id: courseId } },
+  )
+}

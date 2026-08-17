@@ -14,7 +14,7 @@ from app.models.kg_graph import KgGraph
 from app.models.learning import StudentCourseMastery
 from app.models.question import Question
 from app.models.teacher_relation import TeacherClass, TeacherCourse
-from app.models.user import Student
+from app.models.user import Student, Teacher
 from app.services.mastery_service import MasteryService
 
 logger = logging.getLogger(__name__)
@@ -486,6 +486,180 @@ class TeacherService:
                 "error_message": "AI 教学建议服务暂时不可用，请稍后重试。",
                 "suggestion": None,
             }
+
+    async def get_stu_evaluation(
+        self, tea_id: int, stu_id: int, course_id: int, db: AsyncSession
+    ) -> dict:
+        """生成教师对单个学生的建议与评价（调用 AI 引擎的专职 ReAct Agent）。
+
+        综合两个维度（学生 AI 评级、知识图谱进度），各维度等权（2 维各 1/2），
+        缺失维度时触发兜底机制。
+
+        返回结构（与 AI 引擎 /analysis/stu_evaluation 一致）：
+          {
+            "stu_id", "course_id", "course_name",
+            "status": "ok" | "insufficient" | "db_error",
+            "dimensions_available", "weights", "dimensions_detail",
+            "missing_dimensions", "error", "error_message", "evaluation"
+          }
+        """
+        # 1. 校验教师-学生-学科归属：教师必须同时教授该学生所在班级与该学科
+        student_result = await db.execute(
+            select(Student.stu_id, Student.class_id).where(Student.stu_id == stu_id)
+        )
+        student_row = student_result.first()
+        if student_row is None:
+            return {
+                "stu_id": stu_id,
+                "course_id": course_id,
+                "course_name": None,
+                "status": "db_error",
+                "dimensions_available": 0,
+                "weights": {},
+                "dimensions_detail": {},
+                "missing_dimensions": [],
+                "error": "no_access",
+                "error_message": "学生不存在。",
+                "evaluation": None,
+            }
+        _, stu_class_id = student_row
+        if stu_class_id is None:
+            return {
+                "stu_id": stu_id,
+                "course_id": course_id,
+                "course_name": None,
+                "status": "db_error",
+                "dimensions_available": 0,
+                "weights": {},
+                "dimensions_detail": {},
+                "missing_dimensions": [],
+                "error": "no_access",
+                "error_message": "该学生未分配班级，无法评估。",
+                "evaluation": None,
+            }
+        if not await self._teacher_has_access_to_class_and_course(
+            tea_id, class_id=stu_class_id, course_id=course_id, db=db
+        ):
+            return {
+                "stu_id": stu_id,
+                "course_id": course_id,
+                "course_name": None,
+                "status": "db_error",
+                "dimensions_available": 0,
+                "weights": {},
+                "dimensions_detail": {},
+                "missing_dimensions": [],
+                "error": "no_access",
+                "error_message": "您无权访问该学生或该学科的学习数据。",
+                "evaluation": None,
+            }
+
+        # 2. 获取学科名称
+        course_result = await db.execute(
+            select(Course.course_name).where(Course.course_id == course_id)
+        )
+        course_name = course_result.scalar_one_or_none()
+
+        # 3. 调用 AI 引擎生成建议与评价
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                response = await client.post(
+                    f"{settings.AI_SERVICE_URL}/analysis/stu_evaluation",
+                    params={
+                        "stu_id": stu_id,
+                        "course_id": course_id,
+                        "course_name": course_name,
+                    },
+                    headers={"X-Service-Token": settings.AI_SERVICE_TOKEN},
+                )
+                if response.status_code >= 400:
+                    logger.warning(
+                        f"Stu evaluation request failed: "
+                        f"stu_id={stu_id}, course_id={course_id}, "
+                        f"status={response.status_code}"
+                    )
+                    return {
+                        "stu_id": stu_id,
+                        "course_id": course_id,
+                        "course_name": course_name,
+                        "status": "db_error",
+                        "dimensions_available": 0,
+                        "weights": {},
+                        "dimensions_detail": {},
+                        "missing_dimensions": [],
+                        "error": "ai_error",
+                        "error_message": "AI 建议与评价服务暂时不可用，请稍后重试。",
+                        "evaluation": None,
+                    }
+                return response.json()
+        except httpx.HTTPError as e:
+            logger.error(f"Stu evaluation request error: {e}")
+            return {
+                "stu_id": stu_id,
+                "course_id": course_id,
+                "course_name": course_name,
+                "status": "db_error",
+                "dimensions_available": 0,
+                "weights": {},
+                "dimensions_detail": {},
+                "missing_dimensions": [],
+                "error": "ai_error",
+                "error_message": "AI 建议与评价服务暂时不可用，请稍后重试。",
+                "evaluation": None,
+            }
+
+    async def save_stu_evaluation(
+        self, tea_id: int, stu_id: int, course_id: int, ea_description: str, db: AsyncSession
+    ) -> dict:
+        """保存教师对某学生的评价到 evaluation_analysis 表。
+
+        严格校验教师-学生-学科归属，防止越权保存评价。
+        评价内容写入 evaluation_analysis.ea_description 字段。
+        """
+        # 1. 校验教师-学生-学科归属
+        student_result = await db.execute(
+            select(Student.stu_id, Student.class_id).where(Student.stu_id == stu_id)
+        )
+        student_row = student_result.first()
+        if student_row is None:
+            return {"success": False, "message": "学生不存在。"}
+        _, stu_class_id = student_row
+        if stu_class_id is None:
+            return {"success": False, "message": "该学生未分配班级，无法保存评价。"}
+        if not await self._teacher_has_access_to_class_and_course(
+            tea_id, class_id=stu_class_id, course_id=course_id, db=db
+        ):
+            return {"success": False, "message": "您无权访问该学生或该学科的学习数据。"}
+
+        # 2. 获取教师名称
+        teacher_result = await db.execute(
+            select(Teacher.tea_name).where(Teacher.tea_id == tea_id)
+        )
+        tea_name = teacher_result.scalar_one_or_none() or "教师"
+
+        # 3. 调用 AI 引擎保存评价
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    f"{settings.AI_SERVICE_URL}/analysis/stu_evaluation/save",
+                    json={
+                        "stu_id": stu_id,
+                        "publisher_id": tea_id,
+                        "publisher_name": tea_name,
+                        "ea_description": ea_description,
+                    },
+                    headers={"X-Service-Token": settings.AI_SERVICE_TOKEN},
+                )
+                if response.status_code >= 400:
+                    logger.warning(
+                        f"Save stu evaluation failed: "
+                        f"stu_id={stu_id}, status={response.status_code}"
+                    )
+                    return {"success": False, "message": "保存评价失败，请稍后重试。"}
+                return response.json()
+        except httpx.HTTPError as e:
+            logger.error(f"Save stu evaluation request error: {e}")
+            return {"success": False, "message": "保存评价服务暂时不可用，请稍后重试。"}
 
     async def get_student_knowledge_graph(
         self, tea_id: int, student_id: int, course_id: int, db: AsyncSession

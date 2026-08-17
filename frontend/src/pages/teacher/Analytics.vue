@@ -280,18 +280,60 @@
 
           <el-card shadow="never" class="flex-1">
             <template #header>
-              <span class="text-sm font-bold">教师建议与评价</span>
+              <div class="flex items-center justify-between">
+                <span class="text-sm font-bold">教师建议与评价</span>
+                <span v-if="stuEvaluationWeightsText" class="text-xs text-slate-400">
+                  {{ stuEvaluationWeightsText }}
+                </span>
+              </div>
             </template>
 
-            <el-input
-              v-model="teacherSuggestion"
-              type="textarea"
-              :rows="8"
-              placeholder="可手动编辑或后续接入自动生成..."
-            />
+            <!-- 加载中 -->
+            <div v-if="stuEvaluationLoading" class="flex h-[220px] flex-col items-center justify-center gap-3 text-slate-400">
+              <el-icon class="is-loading" :size="24"><Loading /></el-icon>
+              <span>AI 正在综合分析学生学情，生成建议与评价...</span>
+            </div>
+
+            <!-- 数据不足 / 异常 -->
+            <div v-else-if="stuEvaluationError" class="flex h-[220px] flex-col items-center justify-center gap-2 text-center">
+              <el-icon :size="28" class="text-amber-500"><WarningFilled /></el-icon>
+              <p class="text-sm text-slate-600">{{ stuEvaluationError }}</p>
+              <p v-if="stuEvaluationMissing.length" class="text-xs text-slate-400">
+                缺失维度：{{ stuEvaluationMissing.join('、') }}
+              </p>
+            </div>
+
+            <!-- 评价内容 -->
+            <template v-else>
+              <el-input
+                v-model="teacherSuggestion"
+                type="textarea"
+                :rows="8"
+                placeholder="点击「生成建议」，AI 将综合学生 AI 评级与知识图谱进度两个维度，生成个性化建议与评价。"
+              />
+              <div v-if="stuEvaluationNotes" class="mt-2 rounded-lg bg-amber-50/80 p-2 text-xs text-amber-700">
+                {{ stuEvaluationNotes }}
+              </div>
+            </template>
+
             <div class="mt-4 flex justify-end gap-2">
-              <el-button size="small">生成建议</el-button>
-              <el-button type="primary" size="small">保存</el-button>
+              <el-button
+                size="small"
+                :loading="stuEvaluationLoading"
+                :disabled="currentStudent === null || selectedCourse === null"
+                @click="loadStuEvaluation"
+              >
+                {{ stuEvaluationLoading ? '生成中...' : '生成建议' }}
+              </el-button>
+              <el-button
+                type="primary"
+                size="small"
+                :loading="stuEvaluationSaving"
+                :disabled="!teacherSuggestion.trim() || currentStudent === null || selectedCourse === null"
+                @click="saveStuEvaluation"
+              >
+                保存
+              </el-button>
             </div>
           </el-card>
         </div>
@@ -433,6 +475,7 @@ import {
   watch,
   type ComponentPublicInstance,
 } from 'vue'
+import { ElMessage } from 'element-plus'
 import { PieChart, Share, ZoomIn, ZoomOut, Refresh, Close, Loading, WarningFilled, DataAnalysis, Flag, MagicStick, Aim, EditPen, ChatLineRound } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import {
@@ -441,13 +484,16 @@ import {
   getDifficultChapters,
   getDifficultKnowledge,
   getStudentKnowledgeGraph,
+  getStuEvaluation,
   getTeacherClasses,
   getTeacherCourses,
+  saveStuEvaluation,
   type ClassStudent,
   type ClassTeachingSuggestion,
   type DifficultChapter,
   type DifficultKnowledgePoint,
   type StudentKnowledgeGraph,
+  type StuEvaluation,
   type TeacherClass,
   type TeacherCourse,
 } from '@/api/teacher'
@@ -466,6 +512,27 @@ const difficultChapterList = ref<DifficultChapter[]>([])
 const studentDialogVisible = ref(false)
 const teacherSuggestion = ref('')
 const currentStudent = ref<ClassStudent | null>(null)
+
+// ===== 教师建议与评价（专职 ReAct Agent，双维度评估） =====
+const stuEvaluationLoading = ref(false)
+const stuEvaluationSaving = ref(false)
+const stuEvaluationError = ref('')
+const stuEvaluationMissing = ref<string[]>([])
+const stuEvaluationNotes = ref('')
+const stuEvaluationWeights = ref<Record<string, number>>({})
+
+const STU_DIMENSION_LABELS_MAP: Record<string, string> = {
+  level: '学生 AI 评级',
+  knowledge_mastery: '知识点掌握程度',
+  course_mastery: '学科掌握程度',
+}
+const stuDimensionLabel = (key: string) => STU_DIMENSION_LABELS_MAP[key] || key
+const stuEvaluationWeightsText = computed(() => {
+  const parts = Object.entries(stuEvaluationWeights.value)
+    .filter(([, w]) => w > 0)
+    .map(([k, w]) => `${stuDimensionLabel(k)} ${(w * 100).toFixed(0)}%`)
+  return parts.length ? `权重：${parts.join('、')}` : ''
+})
 
 // ===== AI 班级教学建议（三维度评估） =====
 const teachingSuggestionLoading = ref(false)
@@ -1189,10 +1256,85 @@ const wordCloudStyle = (item: DifficultKnowledgePoint, idx: number) => {
 const openStudentDetail = (student: ClassStudent) => {
   currentStudent.value = student
   teacherSuggestion.value = ''
+  stuEvaluationError.value = ''
+  stuEvaluationMissing.value = []
+  stuEvaluationNotes.value = ''
+  stuEvaluationWeights.value = {}
   studentDialogVisible.value = true
   // 加载该学生在当前所选学科下的个人知识图谱
   if (selectedCourse.value !== null) {
     void loadStudentKnowledgeGraph(student.stu_id, selectedCourse.value)
+  }
+}
+
+// 生成教师对单个学生的建议与评价（AI 专职 ReAct Agent，双维度评估）
+const loadStuEvaluation = async () => {
+  if (currentStudent.value === null || selectedCourse.value === null) return
+  stuEvaluationLoading.value = true
+  stuEvaluationError.value = ''
+  stuEvaluationMissing.value = []
+  stuEvaluationNotes.value = ''
+  stuEvaluationWeights.value = {}
+  teacherSuggestion.value = ''
+
+  try {
+    const data = await getStuEvaluation(currentStudent.value.stu_id, selectedCourse.value)
+    if (data.status === 'ok' && data.evaluation) {
+      stuEvaluationWeights.value = data.weights || {}
+      stuEvaluationNotes.value = data.evaluation.teacher_notes || ''
+      // 将结构化评价组装为可编辑文本，供教师审阅/修改后保存
+      const lines: string[] = []
+      lines.push(`【整体评价】${data.evaluation.overall_assessment || ''}`)
+      if (data.evaluation.strengths?.length) {
+        lines.push(`【优势】${data.evaluation.strengths.join('；')}`)
+      }
+      if (data.evaluation.weaknesses?.length) {
+        lines.push(`【薄弱点】${data.evaluation.weaknesses.join('；')}`)
+      }
+      if (data.evaluation.suggestions?.length) {
+        lines.push('【建议】')
+        for (const s of data.evaluation.suggestions) {
+          lines.push(`- ${s.suggestion}：${s.detail}`)
+        }
+      }
+      if (data.evaluation.priority_focus?.length) {
+        lines.push(`【优先改进】${data.evaluation.priority_focus.join('、')}`)
+      }
+      teacherSuggestion.value = lines.join('\n')
+    } else if (data.status === 'insufficient') {
+      stuEvaluationError.value =
+        data.error_message || '当前数据不足，暂时无法给出建议与评价。'
+      stuEvaluationMissing.value = data.missing_dimensions || []
+    } else {
+      stuEvaluationError.value =
+        data.error_message || 'AI 建议与评价服务暂时不可用，请稍后重试。'
+    }
+  } catch (error) {
+    console.error('生成教师建议与评价失败:', error)
+    stuEvaluationError.value = '生成教师建议与评价失败，请稍后重试'
+  } finally {
+    stuEvaluationLoading.value = false
+  }
+}
+
+// 保存教师对某学生的评价到 evaluation_analysis 表
+const saveStuEvaluation = async () => {
+  if (currentStudent.value === null || selectedCourse.value === null) return
+  const content = teacherSuggestion.value.trim()
+  if (!content) return
+  stuEvaluationSaving.value = true
+  try {
+    const res = await saveStuEvaluation(currentStudent.value.stu_id, selectedCourse.value, content)
+    if (res.success) {
+      ElMessage.success(res.message || '评价已保存')
+    } else {
+      ElMessage.error(res.message || '保存评价失败')
+    }
+  } catch (error) {
+    console.error('保存教师评价失败:', error)
+    ElMessage.error('保存教师评价失败，请稍后重试')
+  } finally {
+    stuEvaluationSaving.value = false
   }
 }
 

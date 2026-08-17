@@ -129,6 +129,60 @@ async def get_class_teaching_suggestion(
     )
 
 
+@router.get("/students/{student_id}/evaluation")
+async def get_stu_evaluation(
+    student_id: int,
+    course_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """生成教师对单个学生的建议与评价（AI 专职 ReAct Agent，双维度评估）。
+
+    综合两个维度（学生 AI 评级、知识图谱进度），各维度等权（2 维各 1/2），
+    缺失维度时触发兜底机制。
+    """
+    if current_user["user_type"] != "teacher":
+        return {
+            "status": "db_error",
+            "error": "no_access",
+            "error_message": "仅教师可生成学生建议与评价。",
+            "evaluation": None,
+        }
+
+    service = TeacherService()
+    return await service.get_stu_evaluation(
+        current_user["id"], student_id, course_id, db
+    )
+
+
+@router.post("/students/{student_id}/evaluation")
+async def save_stu_evaluation(
+    student_id: int,
+    course_id: int,
+    payload: dict,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """保存教师对某学生的评价到 evaluation_analysis 表。
+
+    Body 结构：
+    {
+        "ea_description": str   # 评价内容
+    }
+    """
+    if current_user["user_type"] != "teacher":
+        return {"success": False, "message": "仅教师可保存学生评价。"}
+
+    ea_description = (payload or {}).get("ea_description", "")
+    if not ea_description:
+        return {"success": False, "message": "评价内容不能为空。"}
+
+    service = TeacherService()
+    return await service.save_stu_evaluation(
+        current_user["id"], student_id, course_id, ea_description, db
+    )
+
+
 @router.get("/analytics/{class_id}")
 async def get_class_analytics(class_id: int):
     """Get the class analytics report."""

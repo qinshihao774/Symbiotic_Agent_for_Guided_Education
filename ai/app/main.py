@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 import redis.asyncio as aioredis
 from fastapi import Depends, FastAPI
 
-from app.api import analysis, chat, class_teaching, gnn, kg, learning_plan, question_analysis, qa_score
+from app.api import analysis, chat, class_teaching, gnn, kg, learning_plan, question_analysis, qa_score, stu_evaluation
 from app.agent.router import router as agent_router
 from app.conversation.router import router as conversation_router
 from app.config import settings
@@ -74,6 +74,9 @@ app.include_router(learning_plan.router, prefix="/analysis", tags=["学习规划
 
 # 班级教学建议路由（教师端，三维度评估）
 app.include_router(class_teaching.router, prefix="/analysis", tags=["班级教学建议"], dependencies=auth_dep)
+
+# 教师建议与评价路由（教师端，专职 ReAct Agent，双维度评估）
+app.include_router(stu_evaluation.router, prefix="/analysis", tags=["教师建议与评价"], dependencies=auth_dep)
 
 # AI 题目分析与解惑路由（双维度：题目答案深度剖析 + 知识图谱局部网络视角）
 app.include_router(question_analysis.router, prefix="/analysis", tags=["AI 题目分析"], dependencies=auth_dep)
