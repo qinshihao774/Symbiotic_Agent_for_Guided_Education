@@ -5,7 +5,7 @@ import logging
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
-from app.agent.orchestrator import AgentOrchestrator
+from app.agent.orchestrator_agent import AgentOrchestrator
 from app.agent.schemas import AgentChatRequest
 from app.dependencies import verify_service_token
 from app.engines.llm.client import LLMClient
