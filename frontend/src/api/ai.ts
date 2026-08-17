@@ -241,3 +241,95 @@ export async function sendAgentMessage(
     onError(err instanceof Error ? err : new Error(String(err)))
   }
 }
+
+// ═══════════════════════════════════════════════════════════════
+// AI 助学对话记忆 — 历史对话的增删改查
+// ═══════════════════════════════════════════════════════════════
+
+export interface ConversationSummary {
+  conversation_id: number
+  title: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ConversationDetail extends ConversationSummary {
+  stu_id: number
+  messages: ChatHistoryItem[]
+}
+
+function authHeaders(): Record<string, string> {
+  const token = localStorage.getItem('token')
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  }
+}
+
+/** 创建一条对话记录（标题由 AI 总结首次对话内容生成） */
+export async function createConversation(
+  firstMessage: string,
+  messages: ChatHistoryItem[],
+): Promise<{ conversation_id: number; title: string }> {
+  const response = await fetch(`${API_BASE}/ai/conversations`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ first_message: firstMessage, messages }),
+  })
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+  }
+  return response.json()
+}
+
+/** 列出当前登录学生的全部对话 */
+export async function listConversations(): Promise<ConversationSummary[]> {
+  const response = await fetch(`${API_BASE}/ai/conversations`, {
+    method: 'GET',
+    headers: authHeaders(),
+  })
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+  }
+  return response.json()
+}
+
+/** 获取当前登录学生的单条对话详情 */
+export async function getConversation(conversationId: number): Promise<ConversationDetail> {
+  const response = await fetch(`${API_BASE}/ai/conversations/${conversationId}`, {
+    method: 'GET',
+    headers: authHeaders(),
+  })
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+  }
+  return response.json()
+}
+
+/** 更新当前登录学生的对话内容 */
+export async function updateConversation(
+  conversationId: number,
+  messages: ChatHistoryItem[],
+): Promise<{ success: boolean }> {
+  const response = await fetch(`${API_BASE}/ai/conversations/${conversationId}`, {
+    method: 'PUT',
+    headers: authHeaders(),
+    body: JSON.stringify({ messages }),
+  })
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+  }
+  return response.json()
+}
+
+/** 删除当前登录学生的对话 */
+export async function deleteConversation(conversationId: number): Promise<{ success: boolean }> {
+  const response = await fetch(`${API_BASE}/ai/conversations/${conversationId}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  })
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+  }
+  return response.json()
+}

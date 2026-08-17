@@ -3,11 +3,17 @@ import {
   sendQuickMessage,
   sendDeepMessage,
   sendAgentMessage,
+  createConversation,
+  listConversations,
+  getConversation,
+  updateConversation,
+  deleteConversation,
   type ChatHistoryItem,
   type ChatChunk,
   type AgentSSEEvent,
   type LegacyAgentSSEEvent,
   type SuggestedQuestion,
+  type ConversationSummary,
 } from '@/api/ai'
 import { useSubgraph } from '@/composables/useSubgraph'
 import {
@@ -103,6 +109,12 @@ export function useChat() {
   const suggesting = ref(false)
   const currentController = ref<AbortController | null>(null)
   const { subgraphs, subgraphLoading, subgraphErrors, extractSubgraphs, clearSubgraphs } = useSubgraph()
+
+  // ── 对话记忆状态 ──
+  const conversationId = ref<number | null>(null)
+  const conversations = ref<ConversationSummary[]>([])
+  const conversationsLoading = ref(false)
+  const conversationSaving = ref(false)
 
   function findMessage(messageId: string) {
     return messages.value.find(message => message.id === messageId)
@@ -299,6 +311,114 @@ export function useChat() {
     else applyLegacyEvent(message, event)
   }
 
+  // ═══════════════════════════════════════════════════════════════
+  // 对话记忆 — 历史对话的保存 / 加载 / 删除
+  // ═══════════════════════════════════════════════════════════════
+
+  function toHistoryItems(): ChatHistoryItem[] {
+    return messages.value
+      .filter(message => message.content)
+      .map(message => ({ role: message.role, content: message.content }))
+  }
+
+  /** 判断当前对话是否已有一轮完整问答（用户 + 助手均有内容） */
+  function hasCompleteExchange(): boolean {
+    const userCount = messages.value.filter(m => m.role === 'user' && m.content).length
+    const assistantCount = messages.value.filter(m => m.role === 'assistant' && m.content).length
+    return userCount > 0 && assistantCount > 0
+  }
+
+  /** 保存当前对话：无 conversationId 则创建，否则更新（空对话不存储） */
+  async function persistConversation() {
+    if (conversationSaving.value) return
+    if (!hasCompleteExchange()) return
+    const history = toHistoryItems()
+    if (history.length === 0) return
+
+    conversationSaving.value = true
+    try {
+      if (conversationId.value === null) {
+        const firstUserMessage = messages.value.find(m => m.role === 'user' && m.content)?.content || ''
+        const created = await createConversation(firstUserMessage, history)
+        conversationId.value = created.conversation_id
+        await refreshConversations()
+      } else {
+        await updateConversation(conversationId.value, history)
+        await refreshConversations()
+      }
+    } catch (err) {
+      console.warn('[对话记忆] 保存对话失败', err)
+    } finally {
+      conversationSaving.value = false
+    }
+  }
+
+  /** 刷新侧边栏对话列表 */
+  async function refreshConversations() {
+    try {
+      conversations.value = await listConversations()
+    } catch (err) {
+      console.warn('[对话记忆] 加载对话列表失败', err)
+    }
+  }
+
+  /** 加载对话列表（页面初始化时调用） */
+  async function loadConversations() {
+    conversationsLoading.value = true
+    try {
+      conversations.value = await listConversations()
+    } catch (err) {
+      console.warn('[对话记忆] 加载对话列表失败', err)
+    } finally {
+      conversationsLoading.value = false
+    }
+  }
+
+  /** 加载某条历史对话并恢复为当前对话 */
+  async function loadConversation(id: number) {
+    try {
+      const detail = await getConversation(id)
+      conversationId.value = detail.conversation_id
+      messages.value = detail.messages.map((item, index) => ({
+        id: createId('msg'),
+        role: item.role as 'user' | 'assistant',
+        mode: 'agent',
+        content: item.content,
+      }))
+      kgHitNodes.value = []
+      activeKgHitIndex.value = 0
+      subgraphPanelVisible.value = false
+      clearSubgraphs()
+    } catch (err) {
+      console.warn('[对话记忆] 加载对话失败', err)
+    }
+  }
+
+  /** 新建对话：清空当前消息并重置 conversationId */
+  function newConversation() {
+    cancelCurrentRun()
+    messages.value = []
+    conversationId.value = null
+    kgHitNodes.value = []
+    activeKgHitIndex.value = 0
+    subgraphPanelVisible.value = false
+    clearSubgraphs()
+  }
+
+  /** 删除某条历史对话 */
+  async function deleteConversationById(id: number) {
+    try {
+      await deleteConversation(id)
+      if (conversationId.value === id) {
+        conversationId.value = null
+        messages.value = []
+      }
+      await refreshConversations()
+    } catch (err) {
+      console.warn('[对话记忆] 删除对话失败', err)
+    }
+  }
+
   async function sendMessage(content: string) {
     if (!content.trim() || loading.value) return
 
@@ -346,6 +466,7 @@ export function useChat() {
           loading.value = false
           suggesting.value = false
           currentController.value = null
+          persistConversation()
         },
         (err) => {
           const message = findMessage(assistantMessage.id)
@@ -356,6 +477,7 @@ export function useChat() {
           loading.value = false
           suggesting.value = false
           currentController.value = null
+          persistConversation()
         },
         controller.signal,
       )
@@ -383,12 +505,14 @@ export function useChat() {
         streamingContent.value = ''
         streamingReasoning.value = ''
         currentController.value = null
+        persistConversation()
       },
       (err) => {
         const message = findMessage(assistantMessage.id)
         if (message) message.content = `⚠️ 出错了：${err.message}`
         loading.value = false
         currentController.value = null
+        persistConversation()
       },
     )
   }
@@ -421,6 +545,7 @@ export function useChat() {
   function clearMessages() {
     cancelCurrentRun()
     messages.value = []
+    conversationId.value = null
     kgHitNodes.value = []
     activeKgHitIndex.value = 0
     subgraphPanelVisible.value = false
@@ -447,5 +572,14 @@ export function useChat() {
     extractSubgraphs,
     suggesting,
     selectSuggestedQuestion,
+    // 对话记忆
+    conversationId,
+    conversations,
+    conversationsLoading,
+    conversationSaving,
+    loadConversations,
+    loadConversation,
+    newConversation,
+    deleteConversationById,
   }
 }

@@ -1,10 +1,11 @@
 """AI 网关 — 代理转发到 ai/ 服务"""
 
 import httpx
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
 from app.core.config import settings
+from app.core.deps import get_current_user
 
 router = APIRouter()
 
@@ -14,10 +15,18 @@ def _ai_headers() -> dict[str, str]:
     return {"X-Service-Token": settings.AI_SERVICE_TOKEN}
 
 
+def _inject_user_id(body: dict, current_user: dict) -> dict:
+    """将当前登录用户 ID 注入请求体（严格对应登录用户）"""
+    body = dict(body)
+    body["user_id"] = current_user.get("id")
+    return body
+
+
 @router.post("/chat/quick")
-async def chat_quick(request: Request):
+async def chat_quick(request: Request, current_user: dict = Depends(get_current_user)):
     """快速回答 — SSE 透传到 AI 引擎"""
     body = await request.json()
+    body = _inject_user_id(body, current_user)
 
     async def proxy_stream():
         try:
@@ -41,9 +50,10 @@ async def chat_quick(request: Request):
 
 
 @router.post("/chat/deep")
-async def deep_chat(request: Request):
+async def deep_chat(request: Request, current_user: dict = Depends(get_current_user)):
     """深度解答 — SSE 透传到 AI 引擎（调用 DeepSeek）"""
     body = await request.json()
+    body = _inject_user_id(body, current_user)
 
     async def proxy_stream():
         try:
@@ -67,13 +77,11 @@ async def deep_chat(request: Request):
 
 
 @router.post("/agent/chat")
-async def agent_chat(request: Request):
+async def agent_chat(request: Request, current_user: dict = Depends(get_current_user)):
     """智能体模式对话 — SSE 透传到 AI 引擎 Agent 路由"""
     body = await request.json()
-    # Inject current user ID from auth context
-    user = getattr(request.state, "user", None)
-    if user and "user_id" not in body:
-        body["user_id"] = user.get("id", 1)
+    # 注入当前登录用户 ID（严格对应登录用户）
+    body = _inject_user_id(body, current_user)
 
     # Resolve kg_graph_ids → graph_names
     kg_graph_ids: list[int] = body.get("kg_graph_ids", [])
@@ -244,3 +252,77 @@ async def question_analysis(request: Request):
 async def recommend_questions():
     """GNN 题目推荐 — 转发到 ai/ 服务"""
     pass
+
+
+# ═══════════════════════════════════════════════════════════════
+# AI 助学对话记忆 — 代理转发到 ai/ 服务
+# 所有接口均使用当前登录用户 ID（stu_id），严格对应登录学生，
+# 登录用户只能遍历到自己的历史对话。
+# ═══════════════════════════════════════════════════════════════
+
+
+@router.post("/conversations")
+async def create_conversation(request: Request, current_user: dict = Depends(get_current_user)):
+    """创建一条对话记录（标题由 AI 总结首次对话内容生成）"""
+    body = await request.json()
+    body["stu_id"] = current_user.get("id")
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(
+            f"{settings.AI_SERVICE_URL}/conversation/conversations",
+            headers=_ai_headers(),
+            json=body,
+        )
+        return resp.json()
+
+
+@router.get("/conversations")
+async def list_conversations(current_user: dict = Depends(get_current_user)):
+    """列出当前登录学生的全部对话"""
+    stu_id = current_user.get("id")
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(
+            f"{settings.AI_SERVICE_URL}/conversation/conversations",
+            headers=_ai_headers(),
+            params={"stu_id": stu_id},
+        )
+        return resp.json()
+
+
+@router.get("/conversations/{conversation_id}")
+async def get_conversation(conversation_id: int, current_user: dict = Depends(get_current_user)):
+    """获取当前登录学生的单条对话详情"""
+    stu_id = current_user.get("id")
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.get(
+            f"{settings.AI_SERVICE_URL}/conversation/conversations/{conversation_id}",
+            headers=_ai_headers(),
+            params={"stu_id": stu_id},
+        )
+        return resp.json()
+
+
+@router.put("/conversations/{conversation_id}")
+async def update_conversation(conversation_id: int, request: Request, current_user: dict = Depends(get_current_user)):
+    """更新当前登录学生的对话内容"""
+    body = await request.json()
+    body["stu_id"] = current_user.get("id")
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.put(
+            f"{settings.AI_SERVICE_URL}/conversation/conversations/{conversation_id}",
+            headers=_ai_headers(),
+            json=body,
+        )
+        return resp.json()
+
+
+@router.delete("/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: int, current_user: dict = Depends(get_current_user)):
+    """删除当前登录学生的对话"""
+    stu_id = current_user.get("id")
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.delete(
+            f"{settings.AI_SERVICE_URL}/conversation/conversations/{conversation_id}",
+            headers=_ai_headers(),
+            params={"stu_id": stu_id},
+        )
+        return resp.json()

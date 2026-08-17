@@ -9,6 +9,7 @@ from fastapi import Depends, FastAPI
 
 from app.api import analysis, chat, class_teaching, gnn, kg, learning_plan, question_analysis, qa_score
 from app.agent.router import router as agent_router
+from app.conversation.router import router as conversation_router
 from app.config import settings
 from app.dependencies import verify_service_token
 from app.tasks.scheduler import start_scheduler, stop_scheduler
@@ -85,6 +86,9 @@ app.include_router(ocr_router, prefix="/ocr", tags=["OCR 文档解析"])
 
 # Agent 智能体模式路由
 app.include_router(agent_router, prefix="/agent", tags=["Agent"], dependencies=auth_dep)
+
+# AI 助学对话记忆路由
+app.include_router(conversation_router, prefix="/conversation", tags=["对话记忆"], dependencies=auth_dep)
 
 
 @app.get("/health")

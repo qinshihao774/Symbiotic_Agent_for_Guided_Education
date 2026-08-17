@@ -15,6 +15,54 @@
     </div>
 
     <div class="chat-body">
+      <aside class="conversation-sidebar" :class="{ collapsed: sidebarCollapsed }">
+        <div class="sidebar-header">
+          <span v-if="!sidebarCollapsed" class="sidebar-title">历史对话</span>
+          <el-button
+            text
+            class="sidebar-toggle"
+            :title="sidebarCollapsed ? '展开历史对话' : '收起历史对话'"
+            @click="sidebarCollapsed = !sidebarCollapsed"
+          >
+            <el-icon><component :is="sidebarCollapsed ? ArrowRight : ArrowLeft" /></el-icon>
+          </el-button>
+        </div>
+
+        <template v-if="!sidebarCollapsed">
+          <el-button
+            class="new-chat-btn"
+            type="primary"
+            plain
+            :icon="Plus"
+            @click="handleNewConversation"
+          >
+            新建对话
+          </el-button>
+
+          <div class="conversation-list" v-loading="conversationsLoading">
+            <div v-if="conversations.length === 0 && !conversationsLoading" class="sidebar-empty">
+              <p>暂无历史对话</p>
+            </div>
+            <div
+              v-for="conv in conversations"
+              :key="conv.conversation_id"
+              class="conversation-item"
+              :class="{ active: conv.conversation_id === conversationId }"
+              @click="handleSelectConversation(conv.conversation_id)"
+            >
+              <span class="conversation-title" :title="conv.title">{{ conv.title }}</span>
+              <span class="conversation-date">{{ formatDate(conv.created_at) }}</span>
+              <el-button
+                text
+                class="conversation-delete"
+                :icon="Delete"
+                @click.stop="handleDeleteConversation(conv.conversation_id)"
+              />
+            </div>
+          </div>
+        </template>
+      </aside>
+
       <div class="messages-shell">
         <div class="chat-messages" ref="messagesRef" @scroll="handleMessagesScroll">
           <div v-if="messages.length === 0" class="empty-state">
@@ -58,8 +106,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
-import { ChatDotRound } from '@element-plus/icons-vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { ChatDotRound, ArrowLeft, ArrowRight, Plus, Delete } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useChat } from '@/composables/useChat'
 import ChatMessage from '@/components/ChatMessage.vue'
 import ChatInput from '@/components/ChatInput.vue'
@@ -85,15 +134,37 @@ const {
   extractSubgraphs,
   suggesting,
   selectSuggestedQuestion,
+  conversationId,
+  conversations,
+  conversationsLoading,
+  loadConversations,
+  loadConversation,
+  newConversation,
+  deleteConversationById,
 } = useChat()
 
 const messagesRef = ref<HTMLElement>()
 const nearBottom = ref(true)
 const showJumpToLatest = ref(false)
+const sidebarCollapsed = ref(false)
 const lastMessageId = computed(() => messages.value[messages.value.length - 1]?.id)
 const activeSubgraph = computed(() => subgraphs.value[activeKgHitIndex.value] ?? null)
 const activeSubgraphLoading = computed(() => subgraphLoading.value[activeKgHitIndex.value] ?? false)
 const activeSubgraphError = computed(() => subgraphErrors.value[activeKgHitIndex.value] ?? null)
+
+function formatDate(value: string): string {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+onMounted(() => {
+  loadConversations()
+})
 
 function handleSelectQuestion(question: SuggestedQuestion) {
   nearBottom.value = true
@@ -106,6 +177,33 @@ function handleSend(content: string) {
   showJumpToLatest.value = false
   sendMessage(content)
   scrollToLatest(true)
+}
+
+function handleNewConversation() {
+  newConversation()
+  nearBottom.value = true
+  showJumpToLatest.value = false
+}
+
+function handleSelectConversation(id: number) {
+  if (id === conversationId.value) return
+  loadConversation(id)
+  nearBottom.value = true
+  showJumpToLatest.value = false
+}
+
+async function handleDeleteConversation(id: number) {
+  try {
+    await ElMessageBox.confirm('确定删除这段历史对话吗？删除后不可恢复。', '删除对话', {
+      confirmButtonText: '删除',
+      cancelButtonText: '取消',
+      type: 'warning',
+    })
+  } catch {
+    return
+  }
+  await deleteConversationById(id)
+  ElMessage.success('对话已删除')
 }
 
 function handleRetrySubgraph() {
@@ -176,6 +274,89 @@ watch(
 .clear-btn { margin-left: 0; padding: 8px 16px; }
 .clear-btn-wrapper :deep(.inner-content) { background: #e5e8e4; }
 .chat-body { display: flex; flex: 1; min-height: 0; overflow: hidden; }
+.conversation-sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid rgba(0, 0, 0, 0.05);
+  background: rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(10px);
+  transition: width 0.2s ease;
+  overflow: hidden;
+}
+.conversation-sidebar.collapsed {
+  width: 48px;
+  border-right: 1px solid rgba(0, 0, 0, 0.05);
+}
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 12px 8px;
+  min-height: 44px;
+}
+.sidebar-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1f2937;
+  white-space: nowrap;
+}
+.sidebar-toggle { padding: 6px; color: #64748b; }
+.sidebar-toggle:hover { color: #1f2937; }
+.new-chat-btn {
+  margin: 0 12px 10px;
+  width: calc(100% - 24px);
+}
+.conversation-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 8px 12px;
+}
+.conversation-list::-webkit-scrollbar { width: 6px; }
+.conversation-list::-webkit-scrollbar-track { background: transparent; }
+.conversation-list::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.12); border-radius: 3px; }
+.conversation-list::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.22); }
+.sidebar-empty { padding: 24px 8px; text-align: center; color: #9ca3af; font-size: 12px; }
+.sidebar-empty p { margin: 0; }
+.conversation-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px;
+  margin-bottom: 2px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.conversation-item:hover { background: rgba(0, 0, 0, 0.04); }
+.conversation-item.active { background: rgba(64, 158, 255, 0.12); }
+.conversation-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: #374151;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.conversation-item.active .conversation-title { color: #1f6feb; font-weight: 500; }
+.conversation-date {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: #9ca3af;
+  white-space: nowrap;
+}
+.conversation-delete {
+  flex-shrink: 0;
+  padding: 4px;
+  color: #9ca3af;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.conversation-item:hover .conversation-delete { opacity: 1; }
+.conversation-delete:hover { color: #f56c6c; }
 .messages-shell { position: relative; flex: 1; min-width: 0; }
 .chat-messages { height: 100%; overflow-y: auto; padding: 20px; box-sizing: border-box; scroll-behavior: smooth; }
 .chat-messages::-webkit-scrollbar { width: 8px; }
