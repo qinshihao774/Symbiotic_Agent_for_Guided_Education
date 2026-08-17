@@ -27,16 +27,13 @@ error_type 说明（兜底机制核心）：
 - "no_data": 查询成功但该维度无内容 → 前端提示"可能该班级还没有开展学习哦~"
 - null:      查询成功且有数据
 """
-import json
 import logging
-from datetime import date, datetime
-from decimal import Decimal
 from typing import Any
 
 import psycopg2
 import psycopg2.extras
 
-from app.config import settings
+from app.agent.tools._base import get_conn, make_json_safe, make_tool_result
 
 logger = logging.getLogger(__name__)
 
@@ -45,36 +42,11 @@ logger = logging.getLogger(__name__)
 # 数据库连接与底层查询函数（不暴露给 Agent）
 # ═══════════════════════════════════════════════════════════════
 
-def _get_conn():
-    """创建 PostgreSQL 连接（复用 AGE 配置中的数据库连接信息）"""
-    conn = psycopg2.connect(
-        host=settings.AGE_HOST,
-        port=settings.AGE_PORT,
-        dbname=settings.AGE_DB,
-        user=settings.AGE_USER,
-        password=settings.AGE_PASSWORD,
-    )
-    conn.set_session(autocommit=True)
-    return conn
-
-
-def _make_json_safe(obj: Any) -> Any:
-    """递归转换对象中的非 JSON 可序列化类型为安全类型"""
-    if isinstance(obj, (datetime, date)):
-        return obj.isoformat()
-    if isinstance(obj, Decimal):
-        return float(obj)
-    if isinstance(obj, dict):
-        return {k: _make_json_safe(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [_make_json_safe(item) for item in obj]
-    return obj
-
 
 def query_class_students(class_id: int) -> list[dict[str, Any]]:
     """查询班级内所有学生的评级分布（students.stu_level）"""
     try:
-        conn = _get_conn()
+        conn = get_conn()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 "SELECT stu_id, stu_name, stu_level "
@@ -103,7 +75,7 @@ def query_class_mastery(class_id: int, course_id: int) -> dict[str, Any]:
     - 薄弱知识点：按知识点名聚合，取平均掌握度最低的前若干项
     """
     try:
-        conn = _get_conn()
+        conn = get_conn()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             # 班级学生 ID 集合
             cur.execute(
@@ -177,7 +149,7 @@ def query_class_difficult(class_id: int, course_id: int) -> dict[str, Any]:
     - difficult_knowledge: 错题知识点分布（复用教师端疑难知识点词云逻辑）
     """
     try:
-        conn = _get_conn()
+        conn = get_conn()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             # 错题知识点分布（按知识点聚合）
             cur.execute(
@@ -241,21 +213,13 @@ def _build_students_result(class_id: int) -> dict[str, Any]:
     try:
         students = query_class_students(class_id)
     except Exception as e:
-        return {
-            "tool": "query_class_students",
-            "success": False,
-            "error_type": "db_error",
-            "data": {"students": [], "level_distribution": {}},
-            "summary": f"查询班级学生评级时数据库连接异常: {str(e)}",
-        }
+        return make_tool_result("query_class_students", False,
+                                {"students": [], "level_distribution": {}},
+                                f"查询班级学生评级时数据库连接异常: {str(e)}", "db_error")
     if not students:
-        return {
-            "tool": "query_class_students",
-            "success": False,
-            "error_type": "no_data",
-            "data": {"students": [], "level_distribution": {}},
-            "summary": f"班级 {class_id} 暂无学生数据。可能该班级还没有学生哦~",
-        }
+        return make_tool_result("query_class_students", False,
+                                {"students": [], "level_distribution": {}},
+                                f"班级 {class_id} 暂无学生数据。可能该班级还没有学生哦~", "no_data")
 
     # 统计评级分布
     distribution: dict[str, int] = {}
@@ -268,16 +232,9 @@ def _build_students_result(class_id: int) -> dict[str, Any]:
         lines.append(f"  - {level}: {distribution[level]} 人")
     lines.append("\n⚠ 评级越低（D/E）的学生越多，说明班级整体基础越薄弱，需要重点关注。")
 
-    return {
-        "tool": "query_class_students",
-        "success": True,
-        "error_type": None,
-        "data": {
-            "students": _make_json_safe(students),
-            "level_distribution": distribution,
-        },
-        "summary": "\n".join(lines),
-    }
+    return make_tool_result("query_class_students", True,
+                            {"students": make_json_safe(students), "level_distribution": distribution},
+                            "\n".join(lines))
 
 
 def _build_mastery_result(class_id: int, course_id: int) -> dict[str, Any]:
@@ -285,22 +242,13 @@ def _build_mastery_result(class_id: int, course_id: int) -> dict[str, Any]:
     try:
         mastery = query_class_mastery(class_id, course_id)
     except Exception as e:
-        return {
-            "tool": "query_class_mastery",
-            "success": False,
-            "error_type": "db_error",
-            "data": {"avg_degree": None, "avg_process": None, "node_count": 0, "weakest_nodes": []},
-            "summary": f"查询班级掌握度时数据库连接异常: {str(e)}",
-        }
+        return make_tool_result("query_class_mastery", False,
+                                {"avg_degree": None, "avg_process": None, "node_count": 0, "weakest_nodes": []},
+                                f"查询班级掌握度时数据库连接异常: {str(e)}", "db_error")
 
     if not mastery.get("node_count"):
-        return {
-            "tool": "query_class_mastery",
-            "success": False,
-            "error_type": "no_data",
-            "data": mastery,
-            "summary": f"班级 {class_id} 在学科 {course_id} 暂无知识点掌握度记录。可能该班级还没有开展学习哦~",
-        }
+        return make_tool_result("query_class_mastery", False, mastery,
+                                f"班级 {class_id} 在学科 {course_id} 暂无知识点掌握度记录。可能该班级还没有开展学习哦~", "no_data")
 
     lines = [f"班级 {class_id} 在学科 {course_id} 的知识点掌握情况："]
     lines.append(f"  - 知识点平均掌握度: {mastery['avg_degree']}/5")
@@ -311,13 +259,8 @@ def _build_mastery_result(class_id: int, course_id: int) -> dict[str, Any]:
     for n in mastery.get("weakest_nodes", []):
         lines.append(f"  - {n['name']}: 平均掌握度 {n['avg_degree']}/5")
 
-    return {
-        "tool": "query_class_mastery",
-        "success": True,
-        "error_type": None,
-        "data": _make_json_safe(mastery),
-        "summary": "\n".join(lines),
-    }
+    return make_tool_result("query_class_mastery", True, make_json_safe(mastery),
+                            "\n".join(lines))
 
 
 def _build_difficult_result(class_id: int, course_id: int) -> dict[str, Any]:
@@ -325,34 +268,20 @@ def _build_difficult_result(class_id: int, course_id: int) -> dict[str, Any]:
     try:
         difficult = query_class_difficult(class_id, course_id)
     except Exception as e:
-        return {
-            "tool": "query_class_difficult",
-            "success": False,
-            "error_type": "db_error",
-            "data": {"total_wrong": 0, "difficult_knowledge": [], "difficult_chapters": []},
-            "summary": f"查询班级疑难知识点时数据库连接异常: {str(e)}",
-        }
+        return make_tool_result("query_class_difficult", False,
+                                {"total_wrong": 0, "difficult_knowledge": [], "difficult_chapters": []},
+                                f"查询班级疑难知识点时数据库连接异常: {str(e)}", "db_error")
 
     if not difficult.get("total_wrong"):
-        return {
-            "tool": "query_class_difficult",
-            "success": False,
-            "error_type": "no_data",
-            "data": difficult,
-            "summary": f"班级 {class_id} 在学科 {course_id} 暂无错题记录。可能该班级还没有开展练习哦~",
-        }
+        return make_tool_result("query_class_difficult", False, difficult,
+                                f"班级 {class_id} 在学科 {course_id} 暂无错题记录。可能该班级还没有开展练习哦~", "no_data")
 
     lines = [f"班级 {class_id} 在学科 {course_id} 的疑难知识点分布（共 {difficult['total_wrong']} 道错题）："]
     for item in difficult.get("difficult_knowledge", [])[:10]:
         lines.append(f"  - {item['name']}: 错题 {item['wrong_count']} 道，占比 {item['ratio'] * 100:.1f}%")
 
-    return {
-        "tool": "query_class_difficult",
-        "success": True,
-        "error_type": None,
-        "data": _make_json_safe(difficult),
-        "summary": "\n".join(lines),
-    }
+    return make_tool_result("query_class_difficult", True, make_json_safe(difficult),
+                            "\n".join(lines))
 
 
 # ── 工具执行调度表 ─────────────────────────────────────────────
@@ -426,28 +355,15 @@ def execute_class_teaching_tool(tool_name: str, arguments: dict) -> dict[str, An
     """
     executor = _TOOL_EXECUTORS.get(tool_name)
     if executor is None:
-        return {
-            "tool": tool_name,
-            "success": False,
-            "error_type": "db_error",
-            "data": {},
-            "summary": f"未知工具: {tool_name}",
-        }
+        return make_tool_result(tool_name, False, {},
+                                f"未知工具: {tool_name}", "db_error")
     # 只提取该工具签名中声明的参数，忽略 LLM 可能多传的无关参数
-    # （例如 LLM 对 query_class_students 也传了 course_id，会导致 TypeError）
     import inspect
 
     sig = inspect.signature(executor)
-    filtered = {
-        k: v for k, v in arguments.items() if k in sig.parameters
-    }
+    filtered = {k: v for k, v in arguments.items() if k in sig.parameters}
     try:
         return executor(**filtered)
     except TypeError as e:
-        return {
-            "tool": tool_name,
-            "success": False,
-            "error_type": "db_error",
-            "data": {},
-            "summary": f"工具参数错误: {str(e)}",
-        }
+        return make_tool_result(tool_name, False, {},
+                                f"工具参数错误: {str(e)}", "db_error")

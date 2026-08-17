@@ -28,54 +28,24 @@ error_type 说明（兜底机制核心）：
 - "no_data": 查询成功但该维度无内容 → 前端提示"可能用户还没有开展学习哦~"
 - null:      查询成功且有数据
 """
-import json
 import logging
-from datetime import date, datetime
-from decimal import Decimal
 from typing import Any
 
-import psycopg2
 import psycopg2.extras
 
-from app.config import settings
+from app.agent.tools._base import get_conn, make_json_safe, make_tool_result
 
 logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════
-# 数据库连接与底层查询函数（不暴露给 Agent）
+# 数据库底层查询函数（不暴露给 Agent）
 # ═══════════════════════════════════════════════════════════════
-
-def _get_conn():
-    """创建 PostgreSQL 连接（复用 AGE 配置中的数据库连接信息）"""
-    conn = psycopg2.connect(
-        host=settings.AGE_HOST,
-        port=settings.AGE_PORT,
-        dbname=settings.AGE_DB,
-        user=settings.AGE_USER,
-        password=settings.AGE_PASSWORD,
-    )
-    conn.set_session(autocommit=True)
-    return conn
-
-
-def _make_json_safe(obj: Any) -> Any:
-    """递归转换对象中的非 JSON 可序列化类型为安全类型"""
-    if isinstance(obj, (datetime, date)):
-        return obj.isoformat()
-    if isinstance(obj, Decimal):
-        return float(obj)
-    if isinstance(obj, dict):
-        return {k: _make_json_safe(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [_make_json_safe(item) for item in obj]
-    return obj
-
 
 def query_subjects() -> list[dict[str, Any]]:
     """查询全部学科（courses 表）"""
     try:
-        conn = _get_conn()
+        conn = get_conn()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 "SELECT course_id, course_name, kg_id "
@@ -93,7 +63,7 @@ def query_subjects() -> list[dict[str, Any]]:
 def query_ai_analysis(stu_id: int) -> dict[str, Any] | None:
     """查询学生端 AI 分析内容（evaluation_analysis 中 publisher_name='AI'）"""
     try:
-        conn = _get_conn()
+        conn = get_conn()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 "SELECT ea_description, updated_at "
@@ -114,7 +84,7 @@ def query_ai_analysis(stu_id: int) -> dict[str, Any] | None:
 def query_teacher_opinion(stu_id: int) -> dict[str, Any] | None:
     """查询老师意见与评估（evaluation_analysis 中 publisher_name != 'AI'）"""
     try:
-        conn = _get_conn()
+        conn = get_conn()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 "SELECT publisher_name, ea_description, updated_at "
@@ -135,7 +105,7 @@ def query_teacher_opinion(stu_id: int) -> dict[str, Any] | None:
 def query_knowledge_mastery(stu_id: int, course_id: int) -> list[dict[str, Any]]:
     """查询学生某学科的知识图谱掌握度（student_knowledge_mastery 按 kg_id 过滤）"""
     try:
-        conn = _get_conn()
+        conn = get_conn()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
@@ -165,7 +135,7 @@ def query_exercise_progress(stu_id: int, course_id: int) -> dict[str, Any]:
     - progress_rate:   进度比例 = done_count / total_questions
     """
     try:
-        conn = _get_conn()
+        conn = get_conn()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             # 该学科题库题目总数
             cur.execute(
@@ -207,31 +177,22 @@ def _build_subjects_result() -> dict[str, Any]:
     try:
         subjects = query_subjects()
     except Exception as e:
-        return {
-            "tool": "query_subjects",
-            "success": False,
-            "error_type": "db_error",
-            "data": {"subjects": []},
-            "summary": f"查询学科列表时数据库连接异常: {str(e)}",
-        }
+        return make_tool_result(
+            "query_subjects", False, {"subjects": []},
+            f"查询学科列表时数据库连接异常: {e!s}", "db_error",
+        )
     if not subjects:
-        return {
-            "tool": "query_subjects",
-            "success": False,
-            "error_type": "no_data",
-            "data": {"subjects": []},
-            "summary": "数据库中暂无任何学科（courses 表为空）。",
-        }
+        return make_tool_result(
+            "query_subjects", False, {"subjects": []},
+            "数据库中暂无任何学科（courses 表为空）。", "no_data",
+        )
     lines = [f"系统共 {len(subjects)} 门学科，需要为每门学科分别制定学习规划："]
     for s in subjects:
         lines.append(f"  - course_id={s['course_id']}: {s['course_name']}")
-    return {
-        "tool": "query_subjects",
-        "success": True,
-        "error_type": None,
-        "data": {"subjects": _make_json_safe(subjects)},
-        "summary": "\n".join(lines),
-    }
+    return make_tool_result(
+        "query_subjects", True, {"subjects": make_json_safe(subjects)},
+        "\n".join(lines),
+    )
 
 
 def _build_ai_analysis_result(stu_id: int) -> dict[str, Any]:
@@ -239,28 +200,20 @@ def _build_ai_analysis_result(stu_id: int) -> dict[str, Any]:
     try:
         row = query_ai_analysis(stu_id)
     except Exception as e:
-        return {
-            "tool": "query_ai_analysis",
-            "success": False,
-            "error_type": "db_error",
-            "data": {"ai_analysis": None},
-            "summary": f"查询 AI 分析时数据库连接异常: {str(e)}",
-        }
+        return make_tool_result(
+            "query_ai_analysis", False, {"ai_analysis": None},
+            f"查询 AI 分析时数据库连接异常: {e!s}", "db_error",
+        )
     if not row or not row.get("ea_description"):
-        return {
-            "tool": "query_ai_analysis",
-            "success": False,
-            "error_type": "no_data",
-            "data": {"ai_analysis": None},
-            "summary": f"学生 {stu_id} 暂无 AI 分析内容。可能用户还没有开展学习哦~",
-        }
-    return {
-        "tool": "query_ai_analysis",
-        "success": True,
-        "error_type": None,
-        "data": {"ai_analysis": row.get("ea_description")},
-        "summary": f"学生 {stu_id} 的 AI 分析内容已获取（{len(row.get('ea_description') or '')} 字符）。",
-    }
+        return make_tool_result(
+            "query_ai_analysis", False, {"ai_analysis": None},
+            f"学生 {stu_id} 暂无 AI 分析内容。可能用户还没有开展学习哦~", "no_data",
+        )
+    return make_tool_result(
+        "query_ai_analysis", True,
+        {"ai_analysis": row.get("ea_description")},
+        f"学生 {stu_id} 的 AI 分析内容已获取（{len(row.get('ea_description') or '')} 字符）。",
+    )
 
 
 def _build_teacher_opinion_result(stu_id: int) -> dict[str, Any]:
@@ -268,31 +221,23 @@ def _build_teacher_opinion_result(stu_id: int) -> dict[str, Any]:
     try:
         row = query_teacher_opinion(stu_id)
     except Exception as e:
-        return {
-            "tool": "query_teacher_opinion",
-            "success": False,
-            "error_type": "db_error",
-            "data": {"teacher_opinion": None},
-            "summary": f"查询老师意见时数据库连接异常: {str(e)}",
-        }
+        return make_tool_result(
+            "query_teacher_opinion", False, {"teacher_opinion": None},
+            f"查询老师意见时数据库连接异常: {e!s}", "db_error",
+        )
     if not row or not row.get("ea_description"):
-        return {
-            "tool": "query_teacher_opinion",
-            "success": False,
-            "error_type": "no_data",
-            "data": {"teacher_opinion": None},
-            "summary": f"学生 {stu_id} 暂无老师意见与评估。可能用户还没有开展学习哦~",
-        }
-    return {
-        "tool": "query_teacher_opinion",
-        "success": True,
-        "error_type": None,
-        "data": {
+        return make_tool_result(
+            "query_teacher_opinion", False, {"teacher_opinion": None},
+            f"学生 {stu_id} 暂无老师意见与评估。可能用户还没有开展学习哦~", "no_data",
+        )
+    return make_tool_result(
+        "query_teacher_opinion", True,
+        {
             "teacher_opinion": row.get("ea_description"),
             "publisher_name": row.get("publisher_name"),
         },
-        "summary": f"学生 {stu_id} 的老师意见已获取（发布者：{row.get('publisher_name')}）。",
-    }
+        f"学生 {stu_id} 的老师意见已获取（发布者：{row.get('publisher_name')}）。",
+    )
 
 
 def _build_knowledge_mastery_result(stu_id: int, course_id: int) -> dict[str, Any]:
@@ -300,21 +245,16 @@ def _build_knowledge_mastery_result(stu_id: int, course_id: int) -> dict[str, An
     try:
         nodes = query_knowledge_mastery(stu_id, course_id)
     except Exception as e:
-        return {
-            "tool": "query_knowledge_mastery",
-            "success": False,
-            "error_type": "db_error",
-            "data": {"nodes": []},
-            "summary": f"查询知识图谱掌握度时数据库连接异常: {str(e)}",
-        }
+        return make_tool_result(
+            "query_knowledge_mastery", False, {"nodes": []},
+            f"查询知识图谱掌握度时数据库连接异常: {e!s}", "db_error",
+        )
     if not nodes:
-        return {
-            "tool": "query_knowledge_mastery",
-            "success": False,
-            "error_type": "no_data",
-            "data": {"nodes": []},
-            "summary": f"学生 {stu_id} 在学科 {course_id} 暂无知识图谱掌握度记录。可能用户还没有开展学习哦~",
-        }
+        return make_tool_result(
+            "query_knowledge_mastery", False, {"nodes": []},
+            f"学生 {stu_id} 在学科 {course_id} 暂无知识图谱掌握度记录。可能用户还没有开展学习哦~",
+            "no_data",
+        )
     lines = [f"学生 {stu_id} 在学科 {course_id} 的知识图谱掌握度（共 {len(nodes)} 个知识点，按掌握度从低到高）："]
     for item in nodes:
         lines.append(f"  - {item.get('kg_node_name', '未知')}: 掌握度 {item.get('kg_degree', 0)}/5")
@@ -322,13 +262,10 @@ def _build_knowledge_mastery_result(stu_id: int, course_id: int) -> dict[str, An
     lines.append("\n⚠ 最薄弱的 5 个知识点：")
     for item in weak:
         lines.append(f"  - {item.get('kg_node_name', '未知')}: 掌握度 {item.get('kg_degree', 0)}/5")
-    return {
-        "tool": "query_knowledge_mastery",
-        "success": True,
-        "error_type": None,
-        "data": {"nodes": _make_json_safe(nodes)},
-        "summary": "\n".join(lines),
-    }
+    return make_tool_result(
+        "query_knowledge_mastery", True, {"nodes": make_json_safe(nodes)},
+        "\n".join(lines),
+    )
 
 
 def _build_exercise_result(stu_id: int, course_id: int) -> dict[str, Any]:
@@ -336,45 +273,37 @@ def _build_exercise_result(stu_id: int, course_id: int) -> dict[str, Any]:
     try:
         progress = query_exercise_progress(stu_id, course_id)
     except Exception as e:
-        return {
-            "tool": "query_exercise_progress",
-            "success": False,
-            "error_type": "db_error",
-            "data": {"progress": {}},
-            "summary": f"查询习题情况时数据库连接异常: {str(e)}",
-        }
+        return make_tool_result(
+            "query_exercise_progress", False, {"progress": {}},
+            f"查询习题情况时数据库连接异常: {e!s}", "db_error",
+        )
 
     total_questions = progress.get("total_questions") or 0
     done_count = progress.get("done_count") or 0
     if total_questions == 0:
-        return {
-            "tool": "query_exercise_progress",
-            "success": False,
-            "error_type": "no_data",
-            "data": {"progress": _make_json_safe(progress)},
-            "summary": f"学科 {course_id} 题库暂无题目，无法统计做题进度。",
-        }
+        return make_tool_result(
+            "query_exercise_progress", False,
+            {"progress": make_json_safe(progress)},
+            f"学科 {course_id} 题库暂无题目，无法统计做题进度。", "no_data",
+        )
     if done_count == 0:
-        return {
-            "tool": "query_exercise_progress",
-            "success": False,
-            "error_type": "no_data",
-            "data": {"progress": _make_json_safe(progress)},
-            "summary": f"学生 {stu_id} 在学科 {course_id} 尚未开始做题。可能用户还没有开展学习哦~",
-        }
+        return make_tool_result(
+            "query_exercise_progress", False,
+            {"progress": make_json_safe(progress)},
+            f"学生 {stu_id} 在学科 {course_id} 尚未开始做题。可能用户还没有开展学习哦~",
+            "no_data",
+        )
 
     progress_rate = progress.get("progress_rate") or 0.0
     lines = [f"学生 {stu_id} 在学科 {course_id} 的做题进度："]
     lines.append(f"  - 该学科题库共 {total_questions} 题，已做 {done_count} 题")
     lines.append(f"  - 做题进度: {progress_rate * 100:.1f}%")
 
-    return {
-        "tool": "query_exercise_progress",
-        "success": True,
-        "error_type": None,
-        "data": {"progress": _make_json_safe(progress)},
-        "summary": "\n".join(lines),
-    }
+    return make_tool_result(
+        "query_exercise_progress", True,
+        {"progress": make_json_safe(progress)},
+        "\n".join(lines),
+    )
 
 
 # ── 工具执行调度表 ─────────────────────────────────────────────
@@ -478,13 +407,10 @@ def execute_learning_plan_tool(tool_name: str, arguments: dict[str, Any]) -> dic
     """
     executor = _TOOL_EXECUTORS.get(tool_name)
     if executor is None:
-        return {
-            "tool": tool_name,
-            "success": False,
-            "error_type": "db_error",
-            "data": {},
-            "summary": f"未知工具: {tool_name}",
-        }
+        return make_tool_result(
+            tool_name, False, {},
+            f"未知工具: {tool_name}", "db_error",
+        )
 
     try:
         if tool_name == "query_subjects":
@@ -499,10 +425,7 @@ def execute_learning_plan_tool(tool_name: str, arguments: dict[str, Any]) -> dic
         return executor()
     except Exception as e:
         logger.error(f"执行工具 {tool_name} 异常: {e}", exc_info=True)
-        return {
-            "tool": tool_name,
-            "success": False,
-            "error_type": "db_error",
-            "data": {},
-            "summary": f"执行工具 {tool_name} 时发生异常: {str(e)}",
-        }
+        return make_tool_result(
+            tool_name, False, {},
+            f"执行工具 {tool_name} 时发生异常: {e!s}", "db_error",
+        )

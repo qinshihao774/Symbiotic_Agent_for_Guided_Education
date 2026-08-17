@@ -14,6 +14,8 @@ from app.agent.tool_registry import ToolRegistry
 from app.engines.llm.client import LLMClient
 from app.kg_pipeline.neighbors import get_node_neighbors
 
+
+# 协调者 — 多步推理 + 工具调用 就是ai助手或者助教
 logger = logging.getLogger(__name__)
 
 FORCE_ANSWER_PROMPT = "请基于已有信息直接回答用户问题，不要再调用工具。如果信息不足，请如实说明。"

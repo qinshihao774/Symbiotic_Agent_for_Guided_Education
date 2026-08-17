@@ -17,20 +17,23 @@
 {
     "tool": "工具名称",
     "success": true/false,
+    "error_type": "db_error" | "no_data" | null,
     "data": { ... 结构化数据 ... },
     "summary": "人类可读的摘要，供 LLM 推理用"
 }
+
+error_type 说明（兜底机制核心）：
+- "db_error": 数据库连接/查询异常（如连接失败、表不存在）→ 前端显示用户友好错误
+- "no_data": 查询成功但该维度无内容 → 前端提示"可能用户还没有开展学习哦~"
+- null:      查询成功且有数据
 """
-import json
 import logging
-from datetime import date, datetime
-from decimal import Decimal
 from typing import Any
 
 import psycopg2
 import psycopg2.extras
 
-from app.config import settings
+from app.agent.tools._base import get_conn, make_json_safe, make_tool_result
 
 logger = logging.getLogger(__name__)
 
@@ -48,23 +51,10 @@ LEVEL_DESCRIPTION = {
 # 数据库查询函数（底层，不暴露给 Agent）
 # ═══════════════════════════════════════════════════════════════
 
-def _get_conn():
-    """创建 PostgreSQL 连接（复用 AGE 配置中的数据库连接信息）"""
-    conn = psycopg2.connect(
-        host=settings.AGE_HOST,
-        port=settings.AGE_PORT,
-        dbname=settings.AGE_DB,
-        user=settings.AGE_USER,
-        password=settings.AGE_PASSWORD,
-    )
-    conn.set_session(autocommit=True)
-    return conn
-
-
 def query_student_level(stu_id: int) -> str | None:
     """查询学生评级 (students.stu_level)"""
     try:
-        conn = _get_conn()
+        conn = get_conn()
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT stu_level FROM students WHERE stu_id = %s",
@@ -74,7 +64,7 @@ def query_student_level(stu_id: int) -> str | None:
             return row[0] if row else None
     except Exception as e:
         logger.error(f"查询学生评级失败 (stu_id={stu_id}): {e}")
-        return None
+        raise
     finally:
         conn.close()
 
@@ -82,7 +72,7 @@ def query_student_level(stu_id: int) -> str | None:
 def query_knowledge_mastery(stu_id: int) -> list[dict[str, Any]]:
     """查询学生知识图谱掌握度 (student_knowledge_mastery)"""
     try:
-        conn = _get_conn()
+        conn = get_conn()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 "SELECT kg_node_name, kg_degree "
@@ -95,7 +85,7 @@ def query_knowledge_mastery(stu_id: int) -> list[dict[str, Any]]:
             return [dict(r) for r in rows]
     except Exception as e:
         logger.error(f"查询知识图谱掌握度失败 (stu_id={stu_id}): {e}")
-        return []
+        raise
     finally:
         conn.close()
 
@@ -103,7 +93,7 @@ def query_knowledge_mastery(stu_id: int) -> list[dict[str, Any]]:
 def query_wrong_exercises(stu_id: int, limit: int = 50) -> list[dict[str, Any]]:
     """查询学生错题记录，关联题目获取知识点"""
     try:
-        conn = _get_conn()
+        conn = get_conn()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
@@ -128,7 +118,7 @@ def query_wrong_exercises(stu_id: int, limit: int = 50) -> list[dict[str, Any]]:
             return [dict(r) for r in rows]
     except Exception as e:
         logger.error(f"查询错题记录失败 (stu_id={stu_id}): {e}")
-        return []
+        raise
     finally:
         conn.close()
 
@@ -136,7 +126,7 @@ def query_wrong_exercises(stu_id: int, limit: int = 50) -> list[dict[str, Any]]:
 def query_wrong_knowledge_summary(stu_id: int) -> list[dict[str, Any]]:
     """统计学生错题涉及的知识点分布"""
     try:
-        conn = _get_conn()
+        conn = get_conn()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
@@ -157,7 +147,7 @@ def query_wrong_knowledge_summary(stu_id: int) -> list[dict[str, Any]]:
             return [dict(r) for r in rows]
     except Exception as e:
         logger.error(f"查询错题知识点分布失败 (stu_id={stu_id}): {e}")
-        return []
+        raise
     finally:
         conn.close()
 
@@ -166,51 +156,31 @@ def query_wrong_knowledge_summary(stu_id: int) -> list[dict[str, Any]]:
 # ReAct Agent 工具协议层
 # ═══════════════════════════════════════════════════════════════
 
-def _make_json_safe(obj: Any) -> Any:
-    """递归转换对象中的非 JSON 可序列化类型为安全类型
-
-    psycopg2 返回的 datetime / date / Decimal 无法被 json.dumps 处理，
-    此函数在数据进入工具结果前将其转换。
-    """
-    if isinstance(obj, (datetime, date)):
-        return obj.isoformat()
-    if isinstance(obj, Decimal):
-        return float(obj)
-    if isinstance(obj, dict):
-        return {k: _make_json_safe(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [_make_json_safe(item) for item in obj]
-    return obj
-
 def _build_level_result(stu_id: int) -> dict[str, Any]:
     """构建评级查询的 Agent 工具结果"""
-    level = query_student_level(stu_id)
-    if level:
-        desc = LEVEL_DESCRIPTION.get(level.upper(), "未知评级")
-        return {
-            "tool": "query_student_level",
-            "success": True,
-            "data": {"level": level},
-            "summary": f"学生 {stu_id} 的当前评级为 {level}（{desc}）。",
-        }
-    return {
-        "tool": "query_student_level",
-        "success": False,
-        "data": {"level": None},
-        "summary": f"学生 {stu_id} 暂无评级记录。数据库中未找到该学生的 stu_level 数据。",
-    }
+    try:
+        level = query_student_level(stu_id)
+    except Exception as e:
+        return make_tool_result("query_student_level", False, {"level": None},
+                                f"查询学生评级时数据库连接异常: {str(e)}", "db_error")
+    if not level:
+        return make_tool_result("query_student_level", False, {"level": None},
+                                f"学生 {stu_id} 暂无评级记录。", "no_data")
+    desc = LEVEL_DESCRIPTION.get(level.upper(), "未知评级")
+    return make_tool_result("query_student_level", True, {"level": level},
+                            f"学生 {stu_id} 的当前评级为 {level}（{desc}）。")
 
 
 def _build_mastery_result(stu_id: int) -> dict[str, Any]:
     """构建知识图谱掌握度的 Agent 工具结果"""
-    nodes = query_knowledge_mastery(stu_id)
+    try:
+        nodes = query_knowledge_mastery(stu_id)
+    except Exception as e:
+        return make_tool_result("query_knowledge_mastery", False, {"nodes": []},
+                                f"查询知识图谱掌握度时数据库连接异常: {str(e)}", "db_error")
     if not nodes:
-        return {
-            "tool": "query_knowledge_mastery",
-            "success": False,
-            "data": {"nodes": []},
-            "summary": f"学生 {stu_id} 暂无知识图谱掌握度记录。数据库中没有该学生的知识点掌握数据。",
-        }
+        return make_tool_result("query_knowledge_mastery", False, {"nodes": []},
+                                f"学生 {stu_id} 暂无知识图谱掌握度记录。", "no_data")
 
     # 构建供 LLM 阅读的摘要
     lines = [f"学生 {stu_id} 的知识图谱掌握度（共 {len(nodes)} 个知识点，按掌握度从低到高排列）："]
@@ -225,24 +195,21 @@ def _build_mastery_result(stu_id: int) -> dict[str, Any]:
     for item in weak_points:
         lines.append(f"  - {item.get('kg_node_name', '未知')}: 掌握度 {item.get('kg_degree', 0)}/5")
 
-    return {
-        "tool": "query_knowledge_mastery",
-        "success": True,
-        "data": {"nodes": _make_json_safe(nodes)},
-        "summary": "\n".join(lines),
-    }
+    return make_tool_result("query_knowledge_mastery", True, {"nodes": make_json_safe(nodes)},
+                            "\n".join(lines))
 
 
 def _build_wrong_exercises_result(stu_id: int) -> dict[str, Any]:
     """构建错题记录的 Agent 工具结果"""
-    exercises = query_wrong_exercises(stu_id, limit=30)
+    try:
+        exercises = query_wrong_exercises(stu_id, limit=30)
+    except Exception as e:
+        return make_tool_result("query_wrong_exercises", False, {"exercises": []},
+                                f"查询错题记录时数据库连接异常: {str(e)}", "db_error")
     if not exercises:
-        return {
-            "tool": "query_wrong_exercises",
-            "success": False,
-            "data": {"exercises": []},
-            "summary": f"学生 {stu_id} 暂无错题记录。该学生可能尚未完成任何练习题，或所有练习均已正确完成。",
-        }
+        return make_tool_result("query_wrong_exercises", False, {"exercises": []},
+                                f"学生 {stu_id} 暂无错题记录。该学生可能尚未完成任何练习题，或所有练习均已正确完成。",
+                                "no_data")
 
     lines = [f"学生 {stu_id} 的错题记录（最近 {len(exercises)} 条）："]
     for i, item in enumerate(exercises[:15], 1):
@@ -256,24 +223,20 @@ def _build_wrong_exercises_result(stu_id: int) -> dict[str, Any]:
     if len(exercises) > 15:
         lines.append(f"  ...（共 {len(exercises)} 条，仅展示前 15 条）")
 
-    return {
-        "tool": "query_wrong_exercises",
-        "success": True,
-        "data": {"exercises": _make_json_safe(exercises)},
-        "summary": "\n".join(lines),
-    }
+    return make_tool_result("query_wrong_exercises", True, {"exercises": make_json_safe(exercises)},
+                            "\n".join(lines))
 
 
 def _build_wrong_knowledge_result(stu_id: int) -> dict[str, Any]:
     """构建错题知识点分布的 Agent 工具结果"""
-    summary_rows = query_wrong_knowledge_summary(stu_id)
+    try:
+        summary_rows = query_wrong_knowledge_summary(stu_id)
+    except Exception as e:
+        return make_tool_result("query_wrong_knowledge_summary", False, {"summary": []},
+                                f"查询错题知识点分布时数据库连接异常: {str(e)}", "db_error")
     if not summary_rows:
-        return {
-            "tool": "query_wrong_knowledge_summary",
-            "success": False,
-            "data": {"summary": []},
-            "summary": f"学生 {stu_id} 的错题没有关联到具体知识点，或暂无错题记录。",
-        }
+        return make_tool_result("query_wrong_knowledge_summary", False, {"summary": []},
+                                f"学生 {stu_id} 的错题没有关联到具体知识点，或暂无错题记录。", "no_data")
 
     lines = [f"学生 {stu_id} 的错题知识点分布统计（按错题数降序）："]
     for item in summary_rows:
@@ -289,12 +252,8 @@ def _build_wrong_knowledge_result(stu_id: int) -> dict[str, Any]:
     top_name = top.get("kg_node_name") or "未绑定"
     lines.append(f"\n⚠ 错题最集中的知识点是「{top_name}」，需要重点关注。")
 
-    return {
-        "tool": "query_wrong_knowledge_summary",
-        "success": True,
-        "data": {"summary": _make_json_safe(summary_rows)},
-        "summary": "\n".join(lines),
-    }
+    return make_tool_result("query_wrong_knowledge_summary", True, {"summary": make_json_safe(summary_rows)},
+                            "\n".join(lines))
 
 
 # ── 工具执行调度表 ─────────────────────────────────────────────
@@ -314,27 +273,20 @@ def execute_analysis_tool(name: str, stu_id: int) -> dict[str, Any]:
         stu_id: 学生 ID
 
     Returns:
-        统一格式的工具结果字典 {tool, success, data, summary}
+        统一格式的工具结果字典 {tool, success, error_type, data, summary}
         如果工具名未知，返回错误结果。
     """
     executor = _TOOL_EXECUTORS.get(name)
     if executor is None:
-        return {
-            "tool": name,
-            "success": False,
-            "data": None,
-            "summary": f"未知工具: {name}。可用的工具：{list(_TOOL_EXECUTORS.keys())}",
-        }
+        return make_tool_result(name, False, None,
+                                f"未知工具: {name}。可用的工具：{list(_TOOL_EXECUTORS.keys())}",
+                                "db_error")
     try:
         return executor(stu_id)
     except Exception as e:
         logger.error(f"工具 {name} 执行异常 (stu_id={stu_id}): {e}")
-        return {
-            "tool": name,
-            "success": False,
-            "data": None,
-            "summary": f"工具 {name} 执行失败: {str(e)}",
-        }
+        return make_tool_result(name, False, None,
+                                f"工具 {name} 执行失败: {str(e)}", "db_error")
 
 
 def get_stu_analysis_tool_definitions() -> list[dict]:

@@ -16,16 +16,13 @@
 - kg_graphs 表：kg_id → graph_name（AGE 图名）
 - Apache AGE：按 graph_name 查询图，按知识点名定位中心节点，取 1 跳邻居
 """
-import json
 import logging
-from datetime import date, datetime
-from decimal import Decimal
 from typing import Any
 
 import psycopg2
 import psycopg2.extras
 
-from app.config import settings
+from app.agent.tools._base import get_conn, make_json_safe, make_tool_result
 from app.kg_pipeline.queries import GraphQueryError, search_nodes
 from app.kg_pipeline.storage import AgeStorage
 
@@ -33,39 +30,13 @@ logger = logging.getLogger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════
-# 数据库连接与底层查询函数
+# 数据库底层查询函数
 # ═══════════════════════════════════════════════════════════════
-
-def _get_conn():
-    """创建 PostgreSQL 连接（复用 AGE 配置中的数据库连接信息）"""
-    conn = psycopg2.connect(
-        host=settings.AGE_HOST,
-        port=settings.AGE_PORT,
-        dbname=settings.AGE_DB,
-        user=settings.AGE_USER,
-        password=settings.AGE_PASSWORD,
-    )
-    conn.set_session(autocommit=True)
-    return conn
-
-
-def _make_json_safe(obj: Any) -> Any:
-    """递归转换对象中的非 JSON 可序列化类型为安全类型"""
-    if isinstance(obj, (datetime, date)):
-        return obj.isoformat()
-    if isinstance(obj, Decimal):
-        return float(obj)
-    if isinstance(obj, dict):
-        return {k: _make_json_safe(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [_make_json_safe(item) for item in obj]
-    return obj
-
 
 def query_question(question_id: int) -> dict[str, Any] | None:
     """按题目 ID 查询题目完整信息（题干、选项、答案、解析、类型、难度、学科、知识点名）"""
     try:
-        conn = _get_conn()
+        conn = get_conn()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 "SELECT question_id, course_id, question_description, "
@@ -86,7 +57,7 @@ def query_question(question_id: int) -> dict[str, Any] | None:
 def query_course_graph_name(course_id: int) -> str | None:
     """查询学科对应的 AGE 图名（course → kg_id → kg_graphs.graph_name）"""
     try:
-        conn = _get_conn()
+        conn = get_conn()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 "SELECT c.course_name, g.graph_name "
@@ -109,7 +80,7 @@ def query_course_graph_name(course_id: int) -> str | None:
 def query_course_name(course_id: int) -> str | None:
     """查询学科名称"""
     try:
-        conn = _get_conn()
+        conn = get_conn()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 "SELECT course_name FROM courses WHERE course_id = %s",
@@ -130,7 +101,7 @@ def query_student_answer(stu_id: int, question_id: int) -> str | None:
     用于前端未直接传入学生答案时的兜底查询。
     """
     try:
-        conn = _get_conn()
+        conn = get_conn()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 "SELECT do_stu_answer FROM exercise_records "
@@ -281,28 +252,13 @@ def _build_question_result(question_id: int) -> dict[str, Any]:
     try:
         question = query_question(question_id)
     except Exception as e:
-        return {
-            "tool": "query_question",
-            "success": False,
-            "error_type": "db_error",
-            "data": {"question": None},
-            "summary": f"查询题目时数据库连接异常: {str(e)}",
-        }
+        return make_tool_result("query_question", False, {"question": None},
+                            f"查询题目时数据库连接异常: {str(e)}", "db_error")
     if not question:
-        return {
-            "tool": "query_question",
-            "success": False,
-            "error_type": "no_data",
-            "data": {"question": None},
-            "summary": f"题目 {question_id} 不存在。",
-        }
-    return {
-        "tool": "query_question",
-        "success": True,
-        "error_type": None,
-        "data": {"question": _make_json_safe(question)},
-        "summary": f"题目 {question_id} 已获取（{question.get('question_type', '未知类型')}）。",
-    }
+        return make_tool_result("query_question", False, {"question": None},
+                                f"题目 {question_id} 不存在。", "no_data")
+    return make_tool_result("query_question", True, {"question": make_json_safe(question)},
+                            f"题目 {question_id} 已获取（{question.get('question_type', '未知类型')}）。")
 
 
 def _build_graph_context_result(
@@ -313,60 +269,35 @@ def _build_graph_context_result(
     try:
         graph_name = query_course_graph_name(course_id)
     except Exception as e:
-        return {
-            "tool": "query_graph_context",
-            "success": False,
-            "error_type": "db_error",
-            "data": {"graph_context": None},
-            "summary": f"查询学科图谱时数据库连接异常: {str(e)}",
-        }
+        return make_tool_result("query_graph_context", False, {"graph_context": None},
+                                f"查询学科图谱时数据库连接异常: {str(e)}", "db_error")
 
     if not graph_name:
-        return {
-            "tool": "query_graph_context",
-            "success": False,
-            "error_type": "no_data",
-            "data": {"graph_context": None},
-            "summary": f"学科 {course_id} 未关联知识图谱，无法进行图谱视角分析。",
-        }
+        return make_tool_result("query_graph_context", False, {"graph_context": None},
+                                f"学科 {course_id} 未关联知识图谱，无法进行图谱视角分析。", "no_data")
 
     # 定位中心节点
     try:
         center = query_center_node(graph_name, kg_node_name)
     except Exception as e:
-        return {
-            "tool": "query_graph_context",
-            "success": False,
-            "error_type": "db_error",
-            "data": {"graph_context": None},
-            "summary": f"定位中心节点时数据库连接异常: {str(e)}",
-        }
+        return make_tool_result("query_graph_context", False, {"graph_context": None},
+                                f"定位中心节点时数据库连接异常: {str(e)}", "db_error")
 
     if not center:
-        return {
-            "tool": "query_graph_context",
-            "success": False,
-            "error_type": "no_data",
-            "data": {"graph_context": None},
-            "summary": f"知识图谱中未找到知识点「{kg_node_name}」，无法进行图谱视角分析。",
-        }
+        return make_tool_result("query_graph_context", False, {"graph_context": None},
+                                f"知识图谱中未找到知识点「{kg_node_name}」，无法进行图谱视角分析。", "no_data")
 
     # 查询 1 跳邻居
     try:
         neighbors = query_one_hop_neighbors(graph_name, center["id"])
     except Exception as e:
-        return {
-            "tool": "query_graph_context",
-            "success": False,
-            "error_type": "db_error",
-            "data": {"graph_context": None},
-            "summary": f"查询 1 跳邻居时数据库连接异常: {str(e)}",
-        }
+        return make_tool_result("query_graph_context", False, {"graph_context": None},
+                                f"查询 1 跳邻居时数据库连接异常: {str(e)}", "db_error")
 
     context = {
         "graph_name": graph_name,
         "center_node": center,
-        "neighbors": _make_json_safe(neighbors),
+        "neighbors": make_json_safe(neighbors),
         "neighbor_count": len(neighbors),
     }
 
@@ -384,13 +315,8 @@ def _build_graph_context_result(
     else:
         lines.append("  该中心知识点暂无 1 跳邻居。")
 
-    return {
-        "tool": "query_graph_context",
-        "success": True,
-        "error_type": None,
-        "data": {"graph_context": context},
-        "summary": "\n".join(lines),
-    }
+    return make_tool_result("query_graph_context", True, {"graph_context": context},
+                            "\n".join(lines))
 
 
 # ── 工具执行调度表 ─────────────────────────────────────────────
@@ -452,13 +378,8 @@ def execute_question_analysis_tool(
     """
     executor = _TOOL_EXECUTORS.get(tool_name)
     if executor is None:
-        return {
-            "tool": tool_name,
-            "success": False,
-            "error_type": "db_error",
-            "data": {},
-            "summary": f"未知工具: {tool_name}",
-        }
+        return make_tool_result(tool_name, False, {},
+                                f"未知工具: {tool_name}", "db_error")
 
     try:
         if tool_name == "query_question":
@@ -471,10 +392,5 @@ def execute_question_analysis_tool(
         return executor()
     except Exception as e:
         logger.error(f"执行工具 {tool_name} 异常: {e}", exc_info=True)
-        return {
-            "tool": tool_name,
-            "success": False,
-            "error_type": "db_error",
-            "data": {},
-            "summary": f"执行工具 {tool_name} 时发生异常: {str(e)}",
-        }
+        return make_tool_result(tool_name, False, {},
+                                f"执行工具 {tool_name} 时发生异常: {str(e)}", "db_error")
